@@ -1,5 +1,5 @@
-import { startDashboard } from './src/app.mjs';
-import markup from './src/view.mjs';
+import { startDashboard } from './src/app.js';
+import markup from './src/view.js';
 
 let mounted = null;
 

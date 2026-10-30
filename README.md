@@ -4,12 +4,12 @@ A dependency-free JavaScript web application for receiving standard Bluetooth LE
 
 ## Import into an existing website
 
-No local server, Node.js, npm, framework, or build tools are needed to use the app on your website. Upload `hr-monitor.mjs`, `styles.css`, and the `src/` directory together, preserving their relative paths. On your HTTPS page, add:
+No local server, Node.js, npm, framework, or build tools are needed to use the app on your website. Upload `hr-monitor.js`, `styles.css`, and the `src/` directory together, preserving their relative paths. On your HTTPS page, add:
 
 ```html
 <div id="heart-rate-monitor"></div>
 <script type="module">
-  import { mountHeartRateMonitor } from '/cooling-hubs/hr-monitor.mjs';
+  import { mountHeartRateMonitor } from '/cooling-hubs/hr-monitor.js';
 
   const monitor = await mountHeartRateMonitor(
     document.getElementById('heart-rate-monitor')
@@ -19,25 +19,25 @@ No local server, Node.js, npm, framework, or build tools are needed to use the a
 
 Replace `/cooling-hubs/` with the uploaded directory. The entry module loads its own dashboard markup and stylesheet; you do not need to copy the dashboard HTML into your page. The dashboard uses a shadow root to isolate its IDs and styles from the rest of your site. Mount one dashboard per page. For a single-page application, call `await monitor.destroy()` before removing its container; this stops capture, flushes pending writes, releases connections, and removes timers and page listeners.
 
-Your website serves ordinary static assets. All Bluetooth acquisition and file writing happen in the visitor's browser, to a folder that visitor selects on their computer. There is no application backend or data upload. Configure your hosting to serve `.mjs` as `text/javascript` (or another valid JavaScript MIME type). Use desktop Chrome or Edge with the required browser APIs available. The page's Content Security Policy must permit these modules and the stylesheet; use an external entry script if inline modules are disallowed. The site's Permissions Policy must permit Bluetooth on its own origin, and should not disable folder pickers. Load in the main page rather than an iframe.
+Your website serves ordinary static assets. All Bluetooth acquisition and file writing happen in the visitor's browser, to a folder that visitor selects on their computer. There is no application backend or data upload. Configure your hosting to serve `.js` as `text/javascript` (or another valid JavaScript MIME type). Use desktop Chrome or Edge with the required browser APIs available. The page's Content Security Policy must permit these modules and the stylesheet; use an external entry script if inline modules are disallowed. The site's Permissions Policy must permit Bluetooth on its own origin, and should not disable folder pickers. Load in the main page rather than an iframe.
 
 Bluetooth and folder access require a secure context and user permission. An existing HTTPS website supplies that context; `file://` is not a supported launch method for this module application. Importing the module renders the controls but does not bypass the connection or folder permission dialogs.
 
 ## Use as a standalone website
 
-Upload `index.html`, `hr-monitor.mjs`, `styles.css`, and `src/` to any HTTPS static website, preserving the directory layout. Open that page directly in desktop Chrome or Edge. Files such as `server.mjs`, `scripts/`, `test/`, and Git metadata do not need to be uploaded.
+Upload `index.html`, `hr-monitor.js`, `styles.css`, and `src/` to any HTTPS static website, preserving the directory layout. Open that page directly in desktop Chrome or Edge. Files such as `server.js`, `scripts/`, `test/`, and Git metadata do not need to be uploaded.
 
 ## Optional local development
 
-Only if you want to preview the app locally without using your website, Node.js 20.11+ can serve these static files:
+Only if you want to preview the app locally without using your website, Node.js 22.7+ can serve these static files:
 
 ```sh
-node server.mjs
+node server.js
 ```
 
 Then open **http://localhost:5173**. This optional development helper does not participate in Bluetooth acquisition or receive recordings. It is not required on the website or on users' computers.
 
-Maintainers can run automated tests with `node --test`. No npm, package manager, dependency installation, or build step is required. JavaScript modules use `.mjs` so Node can run the tests without a package manifest.
+Maintainers can run automated tests with `node --test`. No npm, package manager, dependency installation, or build step is required. All JavaScript files use `.js`. The optional development commands use Node.js 22.7+ to recognize ES module syntax without a package manifest. Browser imports use native modules and need no Node flags.
 
 ## Collect data
 
@@ -111,7 +111,7 @@ IndexedDB stores session metadata, original measurement rows, and connection/lab
 
 This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
 
-Source layout: `hr-monitor.mjs` is the website import entry point; `src/view.mjs` contains static dashboard markup; `src/bluetooth.mjs` decodes/subscribes to BLE notifications; `src/recorder.mjs` implements journal and folder writing; `src/app.mjs` manages UI and sessions; `server.mjs` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
+Source layout: `hr-monitor.js` is the website import entry point; `src/view.js` contains static dashboard markup; `src/bluetooth.js` decodes/subscribes to BLE notifications; `src/recorder.js` implements journal and folder writing; `src/app.js` manages UI and sessions; `server.js` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
 
 ## Verification limits
 

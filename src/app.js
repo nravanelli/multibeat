@@ -1,5 +1,5 @@
-import { parseHeartRate, subscribe } from './bluetooth.mjs';
-import { Journal, Recorder } from './recorder.mjs';
+import { parseHeartRate, subscribe } from './bluetooth.js';
+import { Journal, Recorder } from './recorder.js';
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
   const devices = new Map();
