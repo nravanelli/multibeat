@@ -2,17 +2,42 @@
 
 A dependency-free JavaScript web application for receiving standard Bluetooth LE heart-rate notifications from multiple monitors, showing a live dashboard, and recording to a user-selected local folder. Acquisition, processing, storage, and recovery run in the browser. No account, backend, cloud upload, analytics, CDN, or build step.
 
-## Run
+## Import into an existing website
 
-With Node.js 20.11+ installed:
+No local server, Node.js, npm, framework, or build tools are needed to use the app on your website. Upload `hr-monitor.mjs`, `styles.css`, and the `src/` directory together, preserving their relative paths. On your HTTPS page, add:
+
+```html
+<div id="heart-rate-monitor"></div>
+<script type="module">
+  import { mountHeartRateMonitor } from '/cooling-hubs/hr-monitor.mjs';
+
+  const monitor = await mountHeartRateMonitor(
+    document.getElementById('heart-rate-monitor')
+  );
+</script>
+```
+
+Replace `/cooling-hubs/` with the uploaded directory. The entry module loads its own dashboard markup and stylesheet; you do not need to copy the dashboard HTML into your page. The dashboard uses a shadow root to isolate its IDs and styles from the rest of your site. Mount one dashboard per page. For a single-page application, call `await monitor.destroy()` before removing its container; this stops capture, flushes pending writes, releases connections, and removes timers and page listeners.
+
+Your website serves ordinary static assets. All Bluetooth acquisition and file writing happen in the visitor's browser, to a folder that visitor selects on their computer. There is no application backend or data upload. Configure your hosting to serve `.mjs` as `text/javascript` (or another valid JavaScript MIME type). Use desktop Chrome or Edge with the required browser APIs available. The page's Content Security Policy must permit these modules and the stylesheet; use an external entry script if inline modules are disallowed. The site's Permissions Policy must permit Bluetooth on its own origin, and should not disable folder pickers. Load in the main page rather than an iframe.
+
+Bluetooth and folder access require a secure context and user permission. An existing HTTPS website supplies that context; `file://` is not a supported launch method for this module application. Importing the module renders the controls but does not bypass the connection or folder permission dialogs.
+
+## Use as a standalone website
+
+Upload `index.html`, `hr-monitor.mjs`, `styles.css`, and `src/` to any HTTPS static website, preserving the directory layout. Open that page directly in desktop Chrome or Edge. Files such as `server.mjs`, `scripts/`, `test/`, and Git metadata do not need to be uploaded.
+
+## Optional local development
+
+Only if you want to preview the app locally without using your website, Node.js 20.11+ can serve these static files:
 
 ```sh
 node server.mjs
 ```
 
-Open **http://localhost:5173** in desktop Chrome or Edge on a computer with Bluetooth LE. Node only serves static files; it does not connect to the straps or receive recordings. You can instead host these files on any HTTPS static server. Do not open `index.html` directly with `file://`.
+Then open **http://localhost:5173**. This optional development helper does not participate in Bluetooth acquisition or receive recordings. It is not required on the website or on users' computers.
 
-Run automated tests directly with `node --test`. No npm, package manager, dependency installation, or build step is required. JavaScript modules use `.mjs` so Node can run the tests without a package manifest.
+Maintainers can run automated tests with `node --test`. No npm, package manager, dependency installation, or build step is required. JavaScript modules use `.mjs` so Node can run the tests without a package manifest.
 
 ## Collect data
 
@@ -86,7 +111,7 @@ IndexedDB stores session metadata, original measurement rows, and connection/lab
 
 This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
 
-Source layout: `src/bluetooth.mjs` decodes/subscribes to BLE notifications; `src/recorder.mjs` implements journal and folder writing; `src/app.mjs` manages UI and sessions; `server.mjs` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
+Source layout: `hr-monitor.mjs` is the website import entry point; `src/view.mjs` contains static dashboard markup; `src/bluetooth.mjs` decodes/subscribes to BLE notifications; `src/recorder.mjs` implements journal and folder writing; `src/app.mjs` manages UI and sessions; `server.mjs` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
 
 ## Verification limits
 
