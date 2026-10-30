@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102b2a"><meta name="description" content="Local Bluetooth heart rate acquisition for Cooling Hubs research.">
+  <title>Cooling Hubs · Heart rate monitor</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header><a class="brand" href="./"><span class="brand-icon">∿</span><span>COOLING HUBS<small>PHYSIOLOGY / LIVE ACQUISITION</small></span></a><span class="local"><i></i> Browser-local data</span></header>
+  <main>
+    <div class="heading"><div><p class="eyebrow">MULTI-DEVICE HEART RATE</p><h1>A pulse on every participant.</h1><p class="subtitle">Connect, label, and record your monitors in one place.</p></div><button id="connect" class="primary">＋ Connect monitor</button></div>
+    <div id="compatibility" class="notice" hidden></div>
+    <div class="notice subtle">Designed for a 20-monitor workflow. Simultaneous Bluetooth capacity depends on your computer and adapter; validate your full setup before data collection. Timestamps reflect browser receipt.</div>
+    <section class="stats" aria-label="Session statistics">
+      <div><span>CONNECTED</span><strong id="connected">0 <small>/ 20 target</small></strong></div>
+      <div><span>LIVE GROUP AVERAGE</span><strong id="average">— <small>bpm</small></strong></div>
+      <div><span>RECORDED SAMPLES</span><strong id="samples">0</strong></div>
+      <div><span>SESSION DURATION</span><strong id="duration">00:00:00</strong></div>
+    </section>
+    <section class="session panel" aria-label="Recording controls">
+      <div class="session-title"><span id="record-dot" class="dot"></span><div><h2 id="record-state">Ready to record</h2><p id="storage-state">Choose an output folder or use browser recovery storage.</p></div></div>
+      <div class="session-controls"><label class="field">SESSION LABEL<input id="session-label" placeholder="e.g. Cooling trial 01" maxlength="120"></label><button id="folder">Choose folder</button><button id="record" class="primary">● Start recording</button><button id="retry" hidden>Retry folder writes</button></div>
+    </section>
+    <p id="error" class="notice danger" role="alert" hidden></p>
+    <div class="toolbar"><div><h2>Monitor dashboard <span id="device-count" class="count">0</span></h2><p>Heart rate &amp; the last 60 seconds of received readings</p></div><div class="toolbar-actions"><input id="search" type="search" aria-label="Filter devices" placeholder="Filter label or device…"><button id="demo">Try 20-device demo</button></div></div>
+    <div id="demo-notice" class="notice demo" hidden>SIMULATION MODE · Generated data only. Simulation is marked in every recorded row.</div>
+    <section id="devices" class="devices" aria-label="Heart rate monitors"></section>
+    <div id="empty" class="empty panel"><div class="empty-icon">♡</div><h2>Your monitors will appear here.</h2><p>Wear or activate a strap, then connect it using the Bluetooth chooser.<br>Repeat for each participant, and assign a label to each device.</p><button id="empty-connect" class="primary">Connect your first monitor</button><small>Desktop Chrome or Edge · Bluetooth LE · HTTPS or localhost</small></div>
+    <section class="bottom-grid">
+      <div class="panel events"><div class="section-heading"><h2>Session activity</h2><span class="eyebrow">LOCAL TIME</span></div><ol id="activity" aria-live="polite"><li class="muted">Waiting for your first connection.</li></ol></div>
+      <div class="panel recovery"><h2>Recordings &amp; recovery</h2><p>Folder recordings are closed CSV chunks, written every 5 seconds. A second copy is journaled in this browser.</p><div class="recovery-controls"><select id="saved" aria-label="Saved sessions"><option value="">No saved sessions</option></select><button id="export">Export recovery</button></div><small>Recovery downloads JSONL, including measurements, labels, and events. Keep this browser profile; private browsing or clearing site data removes recovery records.</small></div>
+    </section>
+    <footer><span>COOLING HUBS / HR MONITOR</span><span>No account. No cloud data upload. Keep this tab open during collection.</span></footer>
+  </main>
+  <template id="device-template"><article class="device panel"><div class="device-top"><span class="device-index"></span><span class="device-status"></span></div><label class="label-wrap"><span class="sr-only">Participant label</span><input class="device-label" placeholder="Add participant label" maxlength="120"></label><p class="device-name"></p><div class="reading"><strong>—</strong><span>bpm</span><span class="contact"></span></div><canvas width="420" height="64" aria-label="Heart rate trend over the last 60 seconds" role="img"></canvas><div class="device-footer"><span class="last-seen">No samples yet</span><button class="device-action">Disconnect</button></div><div class="rr">RR interval —</div></article></template>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
