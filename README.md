@@ -7,12 +7,12 @@ A dependency-free JavaScript web application for receiving standard Bluetooth LE
 With Node.js 20.11+ installed:
 
 ```sh
-npm start
+node server.mjs
 ```
 
 Open **http://localhost:5173** in desktop Chrome or Edge on a computer with Bluetooth LE. Node only serves static files; it does not connect to the straps or receive recordings. You can instead host these files on any HTTPS static server. Do not open `index.html` directly with `file://`.
 
-Use `npm test` for the automated tests and `npm run check` for JavaScript syntax checks. There are no npm dependencies to install.
+Run automated tests directly with `node --test`. No npm, package manager, dependency installation, or build step is required. JavaScript modules use `.mjs` so Node can run the tests without a package manifest.
 
 ## Collect data
 
@@ -86,7 +86,7 @@ IndexedDB stores session metadata, original measurement rows, and connection/lab
 
 This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
 
-Source layout: `src/bluetooth.js` decodes/subscribes to BLE notifications; `src/recorder.js` implements journal and folder writing; `src/app.js` manages UI and sessions; `server.mjs` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
+Source layout: `src/bluetooth.mjs` decodes/subscribes to BLE notifications; `src/recorder.mjs` implements journal and folder writing; `src/app.mjs` manages UI and sessions; `server.mjs` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
 
 ## Verification limits
 

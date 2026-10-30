@@ -1,5 +1,5 @@
-import { parseHeartRate, subscribe } from './bluetooth.js';
-import { Journal, Recorder } from './recorder.js';
+import { parseHeartRate, subscribe } from './bluetooth.mjs';
+import { Journal, Recorder } from './recorder.mjs';
 const $ = id => document.getElementById(id);
 const devices = new Map();
 const journal = new Journal();

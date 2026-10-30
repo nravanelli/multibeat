@@ -1,9 +1,0 @@
-{
-  "name": "cooling-hubs-hr-monitor",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Browser-only multi-device Bluetooth heart rate dashboard and local recorder",
-  "scripts": { "start": "node server.mjs", "test": "node --test", "check": "node --check src/app.js && node --check src/recorder.js && node --check src/bluetooth.js" },
-  "engines": { "node": ">=20" }
-}

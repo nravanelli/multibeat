@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Recorder, csv, csvCell } from '../src/recorder.js';
+import { Recorder, csv, csvCell } from '../src/recorder.mjs';
 function setup() {
   const records = [], files = new Map(); let fail = false, failJournal = false;
   const journal = { add: async (session, value) => { if (failJournal) throw new Error('quota exceeded'); records.push({ session, value }); } };

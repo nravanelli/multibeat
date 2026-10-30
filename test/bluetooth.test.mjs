@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseHeartRate, subscribe } from '../src/bluetooth.js';
+import { parseHeartRate, subscribe } from '../src/bluetooth.mjs';
 const packet = bytes => new DataView(Uint8Array.from(bytes).buffer);
 test('8-bit heart rate, unsupported contact, absent RR', () => {
   assert.deepEqual(parseHeartRate(packet([0, 72])), { bpm: 72, contact: null, energy: null, rr: [], rrMs: [] });
