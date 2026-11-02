@@ -1,6 +1,6 @@
 // Static dashboard markup, shared by the standalone page and website embed.
 export default `
-<header><a class="brand" href="./"><span class="brand-icon">∿</span><span>PULSEDECK<small>HEART RATE / LIVE CAPTURE</small></span></a><span class="local"><i></i> Browser-local data</span></header>
+<header><a class="brand" href="./"><span class="brand-icon">∿</span><span>BEATSTREAM<small>HEART RATE / LIVE CAPTURE</small></span></a><span class="local"><i></i> Browser-local data</span></header>
 <main>
   <div class="heading">
     <div><h1>Live heart rate</h1><p class="subtitle">Choose a folder, then connect your monitors. Capture starts automatically.</p></div>
@@ -37,7 +37,7 @@ export default `
       <div class="panel recovery"><h2>Browser backup</h2><p>A local backup helps recover readings if folder saving is interrupted.</p><div class="recovery-controls"><select id="saved" aria-label="Saved recordings"><option value="">No saved recordings</option></select><button id="export">Export recovery</button></div><small>Downloads a JSONL backup. Clearing site data removes browser backups.</small></div>
     </section>
   </details>
-  <footer><span>PULSEDECK</span><span>Keep this tab open during capture. Data stays on your computer.</span></footer>
+  <footer><span>BEATSTREAM</span><span>Keep this tab open during capture. Data stays on your computer.</span></footer>
 </main>
 <template id="device-template"><article class="device panel"><div class="device-top"><span class="device-index"></span><span class="device-status"></span></div><label class="label-wrap"><span class="sr-only">Participant label</span><input class="device-label" placeholder="Add participant label" maxlength="120"></label><p class="device-name"></p><div class="reading"><strong>—</strong><span>bpm</span><span class="contact"></span></div><canvas width="420" height="64" aria-label="Heart rate trend over the last 60 seconds" role="img"></canvas><div class="device-footer"><span class="last-seen">No samples yet</span><button class="device-action">Pause monitor</button></div><div class="rr">RR interval —</div></article></template>
 `;

@@ -12,13 +12,14 @@ export async function startDashboard(root) {
   let demoMode = false, demoTimer = null, wakeLock = null;
   let savedLabels = {}, pairedIds = [];
   try { savedLabels = JSON.parse(localStorage.getItem('hr-labels') || '{}'); } catch {}
+  // Keep the legacy storage key so rebranding preserves previously authorized monitors.
   try { const ids = JSON.parse(localStorage.getItem('pulsedeck-paired') || '[]'); if (Array.isArray(ids)) pairedIds = ids; } catch {}
   const error = message => { if (destroyed) return; $('error').textContent = message; $('error').hidden = !message; };
 
   function sessionMetadata() {
     return {
-      session_id: 'pulse-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
-      application: 'PulseDeck', started_utc: new Date().toISOString(),
+      session_id: 'beatstream-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
+      application: 'Beatstream', started_utc: new Date().toISOString(),
       timestamp_basis: 'Browser receipt UTC (wall clock); elapsed_ms uses monotonic performance.now(). No sensor clock synchronization.',
       format_version: 1, mode: demoMode ? 'simulation' : 'bluetooth',
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name, label: d.label, simulated: d.simulated, status: d.status }))

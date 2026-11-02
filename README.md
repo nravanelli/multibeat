@@ -1,4 +1,4 @@
-# PulseDeck · Browser heart-rate capture
+# Beatstream · Browser heart-rate capture
 
 A dependency-free JavaScript web application for receiving standard Bluetooth LE heart-rate notifications from multiple monitors, showing a live dashboard, and recording to a user-selected local folder. Acquisition, processing, storage, and recovery run in the browser. No account, backend, cloud upload, analytics, CDN, or build step.
 
@@ -9,7 +9,7 @@ No local server, Node.js, npm, framework, or build tools are needed to use the a
 ```html
 <div id="heart-rate-monitor"></div>
 <script type="module">
-  import { mountHeartRateMonitor } from '/pulsedeck/hr-monitor.js';
+  import { mountHeartRateMonitor } from '/beatstream/hr-monitor.js';
 
   const monitor = await mountHeartRateMonitor(
     document.getElementById('heart-rate-monitor')
@@ -17,7 +17,7 @@ No local server, Node.js, npm, framework, or build tools are needed to use the a
 </script>
 ```
 
-Replace `/pulsedeck/` with the uploaded directory. The entry module loads its own dashboard markup and stylesheet; you do not need to copy the dashboard HTML into your page. The dashboard uses a shadow root to isolate its IDs and styles from the rest of your site. Mount one dashboard per page. For a single-page application, call `await monitor.destroy()` before removing its container; this stops capture, flushes pending writes, releases connections, and removes timers and page listeners.
+Replace `/beatstream/` with the uploaded directory. The entry module loads its own dashboard markup and stylesheet; you do not need to copy the dashboard HTML into your page. The dashboard uses a shadow root to isolate its IDs and styles from the rest of your site. Mount one dashboard per page. For a single-page application, call `await monitor.destroy()` before removing its container; this stops capture, flushes pending writes, releases connections, and removes timers and page listeners.
 
 Your website serves ordinary static assets. All Bluetooth acquisition and file writing happen in the visitor's browser, to a folder that visitor selects on their computer. There is no application backend or data upload. Configure your hosting to serve `.js` as `text/javascript` (or another valid JavaScript MIME type). Use desktop Chrome or Edge with the required browser APIs available. The page's Content Security Policy must permit these modules and the stylesheet; use an external entry script if inline modules are disallowed. The site's Permissions Policy must permit Bluetooth on its own origin, and should not disable folder pickers. Load in the main page rather than an iframe.
 
@@ -43,9 +43,9 @@ Maintainers can run automated tests with `node --test`. No npm, package manager,
 
 1. Choose an output folder and grant read/write permission. A folder is mandatory for both physical monitors and the demo; there is no browser-only recording mode. Folder selection, Connect monitor, and Pause/Resume capture are grouped at the top. There is no session label to enter.
 2. Wear/activate each strap and disconnect competing apps if needed. Click **Connect monitor** and select a device in the Bluetooth chooser. Repeat for additional devices. There is no application-imposed connection limit or fixed target count.
-3. Capture starts automatically when the first monitor establishes its heart-rate service connection. PulseDeck prepares the session files before enabling notifications, so the first readings are included. Later monitors join the same session. There is no separate Start recording step.
+3. Capture starts automatically when the first monitor establishes its heart-rate service connection. Beatstream prepares the session files before enabling notifications, so the first readings are included. Later monitors join the same session. There is no separate Start recording step.
 4. Set participant labels on each card. Labels are remembered in this browser profile. Measurements carry the label in effect at receipt; changes are logged as events. Prefer participant codes to personal names.
-5. If a monitor goes out of range, PulseDeck keeps the recording session open and retries the connection automatically. Readings resume in the same session when the connection succeeds. No missing measurements are fabricated or backfilled.
+5. If a monitor goes out of range, Beatstream keeps the recording session open and retries the connection automatically. Readings resume in the same session when the connection succeeds. No missing measurements are fabricated or backfilled.
 6. Use **Pause monitor** to stop one monitor and its retries. Use **Reconnect** on that card to enable it again. **Pause capture** disconnects all monitors, cancels retries, and drains remaining writes. **Resume capture** enables automatic connections again; the next successful connection begins a new session. Monitors individually paused stay paused until explicitly reconnected.
 7. Open **Activity & recovery** below the device cards for capture events and browser backup export. Check folder errors before closing the page. **Retry folder writes** retries retained batches. Pending failed writes must be saved before a new session can start. **Export recovery** downloads the selected session as JSONL, including metadata, measurements, and events.
 
@@ -57,9 +57,9 @@ Keep the page open and the computer awake. The app requests a screen wake lock w
 
 While capture is enabled and the page is open, disconnected or out-of-range monitors retry indefinitely with delays of 1, 2, 4, 8, 16, then at most 30 seconds between completed failed attempts. Each successful return creates a fresh notification subscription. Only one connection attempt runs per monitor at a time. Explicitly pausing a monitor, pausing capture, or destroying the dashboard cancels its retries. Permission/security errors require restoring browser access and using **Reconnect**; an unsupported service may require choosing a compatible monitor.
 
-PulseDeck remembers the IDs of monitors selected through its Bluetooth chooser. On a later visit, where `navigator.bluetooth.getDevices()` is available, it restores only those remembered devices still authorized for the same origin. Choose an output folder again to enable their connections and automatic capture; folder permission is not assumed across reloads. If this API is unavailable, or site/device permissions have been cleared, use **Connect monitor** again. Operating-system pairing alone does not authorize a website.
+Beatstream remembers the IDs of monitors selected through its Bluetooth chooser. On a later visit, where `navigator.bluetooth.getDevices()` is available, it restores only those remembered devices still authorized for the same origin. Choose an output folder again to enable their connections and automatic capture; folder permission is not assumed across reloads. If this API is unavailable, or site/device permissions have been cleared, use **Connect monitor** again. Operating-system pairing alone does not authorize a website.
 
-Reconnection is a best effort within browser Bluetooth capabilities. Radio availability, existing links to other apps, revoked permissions, background suspension, device firmware, and system sleep can prevent or delay it. Nothing runs after the page is closed. PulseDeck does not continuously scan arbitrary unpaired devices, bypass permission prompts, or promise an exact range-detection time.
+Reconnection is a best effort within browser Bluetooth capabilities. Radio availability, existing links to other apps, revoked permissions, background suspension, device firmware, and system sleep can prevent or delay it. Nothing runs after the page is closed. Beatstream does not continuously scan arbitrary unpaired devices, bypass permission prompts, or promise an exact range-detection time.
 
 ## Device compatibility and capacity
 
@@ -75,7 +75,7 @@ Each session creates a unique subfolder such as:
 
 ```text
 selected-folder/
-  pulse-2026-11-02T03-00-00-000Z-a1b2c3d4/
+  beatstream-2026-11-02T03-00-00-000Z-a1b2c3d4/
     session.json
     measurements-000001.csv
     events-000001.jsonl
@@ -113,11 +113,11 @@ This implementation captures standard heart rate and available RR intervals. Pol
 
 ## Recovery and long sessions
 
-IndexedDB stores session metadata, original measurement rows, and connection/label/visibility events. It is local to the browser profile and origin (including port). Closing the tab does not delete saved records, but clearing site data, private browsing, or browser eviction may do so. Recovery exports should not substitute for checked folder files in long collections. To preserve recordings saved by earlier versions, PulseDeck retains the internal IndexedDB name `cooling-hubs-hr`; this is a storage compatibility identifier, not the application name. Recovery export reads the selected session into memory; very large exports may exceed browser memory. Dashboard history is bounded to 60 seconds (at most 300 notifications per device), and the activity list to 80 entries. Folder-write backlogs remain in memory until retried; resolve disk errors promptly. Old recovery records are retained until site data is cleared; export needed recordings before clearing it.
+IndexedDB stores session metadata, original measurement rows, and connection/label/visibility events. It is local to the browser profile and origin (including port). Closing the tab does not delete saved records, but clearing site data, private browsing, or browser eviction may do so. Recovery exports should not substitute for checked folder files in long collections. To preserve recordings saved by earlier versions, Beatstream retains the internal IndexedDB name `cooling-hubs-hr`; this is a storage compatibility identifier, not the application name. The legacy `pulsedeck-paired` setting is also retained so remembered monitors remain available on the same origin. Recovery export reads the selected session into memory; very large exports may exceed browser memory. Dashboard history is bounded to 60 seconds (at most 300 notifications per device), and the activity list to 80 entries. Folder-write backlogs remain in memory until retried; resolve disk errors promptly. Old recovery records are retained until site data is cleared; export needed recordings before clearing it.
 
 ## Repository
 
-The application and suggested repository name are **PulseDeck** (`pulsedeck`). This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
+The application and suggested repository name are **Beatstream** (`beatstream`). This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
 
 Source layout: `hr-monitor.js` is the website import entry point; `src/view.js` contains static dashboard markup; `src/bluetooth.js` handles BLE notifications and reconnection; `src/capture.js` coordinates required-folder automatic capture; `src/recorder.js` implements journal and folder writing; `src/app.js` manages UI and sessions; `server.js` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
 

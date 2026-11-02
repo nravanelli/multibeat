@@ -4,7 +4,7 @@ These instructions apply throughout this repository. Follow the user's current r
 
 ## Purpose and agreed architecture
 
-Build PulseDeck, a generic browser-only heart-rate acquisition dashboard for Powr Labs, Polar H10, or other monitors exposing the standard Bluetooth LE Heart Rate Service. Support as many monitors as the browser and Bluetooth hardware permit; impose no application connection cap or target denominator. Users need participant labels, per-device receipt timestamps, live readings, and recording to a selected local folder.
+Build Beatstream, a generic browser-only heart-rate acquisition dashboard for Powr Labs, Polar H10, or other monitors exposing the standard Bluetooth LE Heart Rate Service. Support as many monitors as the browser and Bluetooth hardware permit; impose no application connection cap or target denominator. Users need participant labels, per-device receipt timestamps, live readings, and recording to a selected local folder.
 
 - Use plain JavaScript ES modules with `.js` filenames, HTML, and CSS with native browser APIs. Preserve the user’s preference for `.js` filenames. Optional development commands use Node.js 22.7+ for ES module syntax detection; do not add a package manifest for this purpose.
 - The primary integration is importing `mountHeartRateMonitor` into an existing HTTPS website. Preserve this public entry point and its `destroy()` lifecycle.
@@ -53,7 +53,7 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 - `received_utc` is browser wall-clock receipt time. `elapsed_ms` uses monotonic `performance.now()`. Standard notifications do not supply synchronized sensor timestamps. Do not claim precise alignment between devices or absolute beat times.
 - Bluetooth selection and folder pickers need direct user gestures and browser permissions. Detect missing APIs and give actionable feedback.
 - Do not display a fixed connection target or cap. Actual capacity is hardware/browser dependent. Simulation and recorder tests do not establish physical radio capacity.
-- Restore only monitors paired through PulseDeck when `getDevices()` is available. Retry dropped/out-of-range connections with capped backoff while capture is enabled. Explicitly pausing a monitor or capture must cancel retries. Do not promise reconnection while the page is closed or permission is unavailable.
+- Restore only monitors paired through Beatstream when `getDevices()` is available. Retry dropped/out-of-range connections with capped backoff while capture is enabled. Explicitly pausing a monitor or capture must cancel retries. Do not promise reconnection while the page is closed or permission is unavailable.
 
 ## Recording and data integrity
 
