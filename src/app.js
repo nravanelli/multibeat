@@ -1,6 +1,7 @@
 import { parseHeartRate, ReconnectingMonitor } from './bluetooth.js';
 import { Journal, Recorder } from './recorder.js';
 import { CaptureSession } from './capture.js';
+import { monitorDisplay } from './device-state.js';
 
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
@@ -106,7 +107,8 @@ export async function startDashboard(root) {
       onState: (state, detail) => {
         if (destroyed) return;
         const previous = d.status; d.status = state;
-        if (state === 'connecting') d.last = null;
+        if (state === 'connecting') d.connectionStarted = performance.now();
+        if (state === 'connected') { d.connectedAt = performance.now(); d.hasConnected = true; }
         if (state === 'connected') event('connected', `${d.label || d.name} connected; capturing data.`, { device_id: id, label: d.label, device_name: d.name });
         if (state === 'reconnecting' && previous === 'connected') event('connection_lost', `${d.label || d.name}: signal lost. Reconnecting automatically.`, { device_id: id });
         if (state === 'permission') error(`${d.name}: ${detail.message}. Restore Bluetooth permission, then reconnect.`);
@@ -175,17 +177,20 @@ export async function startDashboard(root) {
     const now = performance.now(), filter = $('search').value.trim().toLowerCase();
     let connected = 0; const live = [];
     for (const d of devices.values()) {
-      const stale = d.last && now - d.last.at > 5000;
+      const display = monitorDisplay(d, now);
       if (d.status === 'connected') connected++;
-      if (d.status === 'connected' && d.last && !stale && d.last.contact !== false) live.push(d.last.bpm);
+      if (display.live && d.last.contact !== false) live.push(d.last.bpm);
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);
       const status = d.node.querySelector('.device-status');
-      status.textContent = d.status === 'connected' ? !d.last ? 'WAITING' : stale ? 'STALE SIGNAL' : d.simulated ? 'SIMULATED' : 'LIVE' : d.status === 'permission' ? 'PERMISSION NEEDED' : d.status.toUpperCase();
-      status.className = 'device-status' + (d.status !== 'connected' ? ' offline' : stale || !d.last ? ' stale' : '');
-      d.node.querySelector('.reading strong').textContent = d.last && !stale && d.status === 'connected' ? d.last.bpm : '—';
-      d.node.querySelector('.contact').textContent = d.last?.contact === false ? 'No skin contact' : '';
-      d.node.querySelector('.last-seen').textContent = d.last ? `${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
-      d.node.querySelector('.rr').textContent = d.last?.rrMs.length ? `RR ${d.last.rrMs.map(n => Math.round(n)).join(' / ')} ms` : 'RR interval unavailable';
+      if (status.textContent !== display.text) status.textContent = display.text;
+      status.className = 'device-status' + (display.offline ? ' offline' : !display.live ? ' stale' : '');
+      d.node.classList.toggle('is-offline', display.offline);
+      const note = d.node.querySelector('.connection-note');
+      note.textContent = display.note; note.hidden = !display.note;
+      d.node.querySelector('.reading strong').textContent = display.live ? d.last.bpm : '—';
+      d.node.querySelector('.contact').textContent = display.live && d.last.contact === false ? 'No skin contact' : '';
+      d.node.querySelector('.last-seen').textContent = d.last ? `Last reading ${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
+      d.node.querySelector('.rr').textContent = display.live && d.last.rrMs.length ? `RR ${d.last.rrMs.map(n => Math.round(n)).join(' / ')} ms` : 'RR interval unavailable';
       const action = d.node.querySelector('.device-action');
       action.textContent = d.manager?.enabled || d.simulated && d.status === 'connected' ? 'Pause monitor' : 'Reconnect';
       action.disabled = busy || !capture.enabled;

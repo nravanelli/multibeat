@@ -20,6 +20,7 @@ Build Beatstream, a generic browser-only heart-rate acquisition dashboard for Po
 | `hr-monitor.js` | Public mount API, shadow root, relative asset loading, teardown wrapper |
 | `src/app.js` | Dashboard interaction, paired-device restoration, timers, labels, demo, recovery export |
 | `src/capture.js` | Required output folder, automatic session setup, measurement sequence, pause/resume |
+| `src/device-state.js` | Card freshness/offline status and first-reading timeout |
 | `src/view.js` | Static dashboard markup, including control IDs and the device template |
 | `styles.css` | Responsive dashboard styles, including `:host` for embedding |
 | `src/bluetooth.js` | Standard BLE decoding, cancellable subscriptions, automatic reconnection with backoff |
@@ -40,6 +41,7 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 - Keep dashboard queries scoped to its shadow root. Avoid global IDs, global CSS assumptions, and changes to the host page.
 - Keep markup in `src/view.js`; do not create a second dashboard implementation in `index.html`.
 - Use `textContent` or DOM methods for labels, advertised device names, and error messages. Never interpolate user/device data into HTML. The existing template HTML is static repository content.
+- Keep disconnected or silent monitor cards visible with an explicit OFFLINE badge, last-reading time, and reconnection/pause reason. Do not display old heart rate or RR values as current readings.
 - Preserve accessible labels, keyboard operation, visible errors, and responsive layouts. Do not add remote fonts or other network assets.
 - Clean up connections, listeners, timers, and wake locks on teardown. Check asynchronous connection and recording transitions when changing lifecycle behavior.
 - Keep the demo visibly marked, with `simulated=true` in every generated measurement. Do not silently substitute demo values for missing physical-device data.
