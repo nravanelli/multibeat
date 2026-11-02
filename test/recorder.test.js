@@ -44,15 +44,23 @@ test('journal failure is surfaced but folder recording continues', async () => {
   s.recorder.enqueue(sample(1)); await s.recorder.stop();
   assert.match(s.recorder.journalError, /quota exceeded/); assert.match(s.files.get('measurements-000001.csv'), /P01/);
 });
-test('browser-only recording journals without keeping another unbounded memory copy', async () => {
-  const s = setup(); await s.recorder.start(null, { session_id: 's1' }); s.recorder.enqueue(sample(1)); await s.recorder.stop();
-  assert.equal(s.records.length, 2); assert.equal(s.recorder.pending.length, 0);
+test('recording requires a folder and cannot silently fall back to browser-only storage', async () => {
+  const s = setup();
+  await assert.rejects(s.recorder.start(null, { session_id: 's1' }), /output folder/);
+  assert.equal(s.recorder.active, false); assert.equal(s.records.length, 0);
 });
-test('20 monitors over 60 seconds persist all 1200 measurements across bounded parts', async () => {
+test('48 monitors over 60 seconds persist all 2880 measurements across bounded parts', async () => {
   const s = setup(); await s.recorder.start(s.directory, { session_id: 'load' });
-  for (let sec = 0; sec < 60; sec++) for (let device = 0; device < 20; device++) s.recorder.enqueue({ type: 'measurement', row: { ...sample(sec * 20 + device).row, device_id: `device-${device}` } });
+  for (let sec = 0; sec < 60; sec++) for (let device = 0; device < 48; device++) s.recorder.enqueue({ type: 'measurement', row: { ...sample(sec * 48 + device).row, device_id: `device-${device}` } });
   await s.recorder.stop();
-  assert.equal(s.recorder.count, 1200); assert.equal(s.recorder.part, 3);
+  assert.equal(s.recorder.count, 2880); assert.equal(s.recorder.part, 6);
   const lines = [...s.files.entries()].filter(([k]) => k.endsWith('.csv')).flatMap(([,v]) => v.trim().split('\r\n').slice(1));
-  assert.equal(lines.length, 1200); assert.equal(new Set(lines.map(line => line.split(',')[1])).size, 1200);
+  assert.equal(lines.length, 2880); assert.equal(new Set(lines.map(line => line.split(',')[1])).size, 2880);
+});
+
+test('a new session cannot discard pending writes from a failed session', async () => {
+  const s = setup(); await s.recorder.start(s.directory, { session_id: 's1' });
+  s.diskFailure(true); s.recorder.enqueue(sample(1)); await s.recorder.stop();
+  await assert.rejects(s.recorder.start(s.directory, { session_id: 's2' }), /pending folder writes/);
+  assert.equal(s.recorder.id, 's1'); assert.equal(s.recorder.pending.length, 1);
 });

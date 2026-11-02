@@ -10,6 +10,7 @@ export const csv = rows => COLUMNS.join(',') + '\r\n' + rows.map(row => COLUMNS.
 export class Journal {
   async open() {
     this.db = await new Promise((resolve, reject) => {
+      // Retain this storage name so existing recordings remain recoverable after rebranding.
       const r = indexedDB.open('cooling-hubs-hr', 1);
       r.onupgradeneeded = () => { const s = r.result.createObjectStore('records', { keyPath: 'id', autoIncrement: true }); s.createIndex('session', 'session'); };
       r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
@@ -42,8 +43,11 @@ export class Journal {
 export class Recorder {
   constructor(journal, onStatus = () => {}) { this.journal = journal; this.onStatus = onStatus; this.tail = Promise.resolve(); this.active = false; this.pending = []; this.part = 0; this.diskError = null; this.journalError = null; }
   async start(directory, metadata) {
+    if (!directory) throw new Error('Choose an output folder before capturing data.');
+    if (this.active) throw new Error('A recording session is already active.');
+    if (this.pending.length) throw new Error('Save pending folder writes before starting another session.');
     this.id = metadata.session_id;
-    this.directory = directory ? await directory.getDirectoryHandle(this.id, { create: true }) : null;
+    this.directory = await directory.getDirectoryHandle(this.id, { create: true });
     this.pending = []; this.part = 0; this.diskError = null; this.journalError = null; this.count = 0;
     await this.journal.add(this.id, { type: 'session', ...metadata });
     if (this.directory) await this.write('session.json', JSON.stringify(metadata, null, 2));

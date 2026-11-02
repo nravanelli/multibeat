@@ -27,3 +27,28 @@ test('notification subscription cleanup removes listeners and disconnects', asyn
   characteristic.dispatchEvent(new Event('characteristicvaluechanged'));
   assert.equal(samples, 1); assert.equal(disconnected, 1);
 });
+
+test('prepares output before subscribing, including notifications emitted during start', async () => {
+  let prepared = false, received = 0;
+  const characteristic = new EventTarget();
+  characteristic.startNotifications = async () => {
+    assert.equal(prepared, true);
+    characteristic.dispatchEvent(new Event('characteristicvaluechanged'));
+  };
+  const device = new EventTarget();
+  device.gatt = { connect: async () => ({ getPrimaryService: async () => ({ getCharacteristic: async () => characteristic }) }), disconnect: () => {} };
+  const cleanup = await subscribe(device, () => received++, () => {}, { beforeNotifications: async () => { prepared = true; } });
+  assert.equal(received, 1); cleanup();
+});
+
+test('aborted subscription cleans up even if a pending GATT connection resolves later', async () => {
+  let release, notifications = 0;
+  const deferred = new Promise(resolve => { release = resolve; });
+  const device = new EventTarget();
+  device.gatt = { connect: async () => { await deferred; return { getPrimaryService: async () => { notifications++; } }; }, disconnect: () => {} };
+  const abort = new AbortController();
+  const subscribing = subscribe(device, () => {}, () => {}, { signal: abort.signal });
+  abort.abort(); release();
+  await assert.rejects(subscribing, { name: 'AbortError' });
+  assert.equal(notifications, 0);
+});

@@ -4,7 +4,7 @@ These instructions apply throughout this repository. Follow the user's current r
 
 ## Purpose and agreed architecture
 
-Build a browser-only heart-rate acquisition dashboard for Cooling Hubs research. It should support a workflow of approximately 20 Powr Labs, Polar H10, or other monitors exposing the standard Bluetooth LE Heart Rate Service. Users need participant labels, per-device receipt timestamps, live readings, and recording to a selected local folder.
+Build PulseDeck, a generic browser-only heart-rate acquisition dashboard for Powr Labs, Polar H10, or other monitors exposing the standard Bluetooth LE Heart Rate Service. Support as many monitors as the browser and Bluetooth hardware permit; impose no application connection cap or target denominator. Users need participant labels, per-device receipt timestamps, live readings, and recording to a selected local folder.
 
 - Use plain JavaScript ES modules with `.js` filenames, HTML, and CSS with native browser APIs. Preserve the user’s preference for `.js` filenames. Optional development commands use Node.js 22.7+ for ES module syntax detection; do not add a package manifest for this purpose.
 - The primary integration is importing `mountHeartRateMonitor` into an existing HTTPS website. Preserve this public entry point and its `destroy()` lifecycle.
@@ -18,10 +18,11 @@ Build a browser-only heart-rate acquisition dashboard for Cooling Hubs research.
 | File | Responsibility |
 | --- | --- |
 | `hr-monitor.js` | Public mount API, shadow root, relative asset loading, teardown wrapper |
-| `src/app.js` | Device/session state, dashboard interaction, timers, labels, demo, recovery export |
+| `src/app.js` | Dashboard interaction, paired-device restoration, timers, labels, demo, recovery export |
+| `src/capture.js` | Required output folder, automatic session setup, measurement sequence, pause/resume |
 | `src/view.js` | Static dashboard markup, including control IDs and the device template |
 | `styles.css` | Responsive dashboard styles, including `:host` for embedding |
-| `src/bluetooth.js` | Standard BLE notification decoding and subscription cleanup |
+| `src/bluetooth.js` | Standard BLE decoding, cancellable subscriptions, automatic reconnection with backoff |
 | `src/recorder.js` | CSV serialization, IndexedDB journal, serialized folder writes and retries |
 | `index.html` | Standalone example using the same public mount API |
 | `test/*.test.js` | Node built-in tests; no testing dependencies |
@@ -49,10 +50,12 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 - Preserve the distinction between unsupported contact detection (`null`) and detected loss of contact (`false`).
 - `received_utc` is browser wall-clock receipt time. `elapsed_ms` uses monotonic `performance.now()`. Standard notifications do not supply synchronized sensor timestamps. Do not claim precise alignment between devices or absolute beat times.
 - Bluetooth selection and folder pickers need direct user gestures and browser permissions. Detect missing APIs and give actionable feedback.
-- Twenty devices is a workflow target, not verified radio capacity. Never describe the simulator or recorder load tests as proof of 20 simultaneous physical connections.
+- Do not display a fixed connection target or cap. Actual capacity is hardware/browser dependent. Simulation and recorder tests do not establish physical radio capacity.
+- Restore only monitors paired through PulseDeck when `getDevices()` is available. Retry dropped/out-of-range connections with capped backoff while capture is enabled. Explicitly pausing a monitor or capture must cancel retries. Do not promise reconnection while the page is closed or permission is unavailable.
 
 ## Recording and data integrity
 
+- An output folder is required before pairing/connecting for capture. Automatically prepare a recording when the first monitor connects, before enabling notifications, so its first sample is captured. Do not add a separate manual start step or a browser-only recording mode. Keep a session open across temporary device dropouts; explicit pause stops capture and reconnection.
 - Preserve the IndexedDB journal and folder recording paths. Make storage failures visible and distinguish folder failure from recovery-journal failure.
 - Keep write operations ordered. Do not remove pending data or advance a chunk number until the corresponding writes close successfully. Retrying a failed chunk must not duplicate measurements across completed chunks.
 - The current folder format is `session.json`, numbered measurement CSV chunks, and event JSONL chunks. CSV chunks share the column schema exported by `COLUMNS` in `src/recorder.js`.
@@ -88,7 +91,7 @@ The smoke check needs permission to bind a localhost port and port 5173 to be fr
 
 Use focused regression tests for protocol parsing, storage ordering/failure/retry, schema changes, and lifecycle bugs. Avoid installing a test framework or writing tests that only repeat implementation details. Documentation-only changes do not require running the application suite.
 
-If browser verification is available and relevant, exercise the embedded page, label editing/filtering, the 20-device demo, recording start/stop, saved files, recovery export, and mount/destroy/remount. Use a temporary folder and simulated data. Real hardware testing separately needs the intended computer and monitors. Report unverified browser/hardware behavior clearly; do not invent successful checks.
+If browser verification is available and relevant, exercise the embedded page, label editing/filtering, the demo, automatic capture, folder gating, reconnection and pause/resume, saved files, recovery export, and mount/destroy/remount. Use a temporary folder and simulated data. Real hardware testing separately needs the intended computer and monitors. Report unverified browser/hardware behavior clearly; do not invent successful checks.
 
 ## Finishing a change
 
