@@ -1,30 +1,43 @@
 // Static dashboard markup, shared by the standalone page and website embed.
 export default `
 <header><a class="brand" href="./"><span class="brand-icon">∿</span><span>PULSEDECK<small>HEART RATE / LIVE CAPTURE</small></span></a><span class="local"><i></i> Browser-local data</span></header>
-  <main>
-    <div class="heading"><div><p class="eyebrow">MULTI-DEVICE HEART RATE</p><h1>A pulse on every participant.</h1><p class="subtitle">Connect, label, and record your monitors in one place.</p></div><button id="connect" class="primary">＋ Connect monitor</button></div>
-    <div id="compatibility" class="notice" hidden></div>
-    <div class="notice subtle">Connect as many monitors as your Bluetooth setup supports. Choose an output folder first; capture starts automatically when a monitor connects. Timestamps reflect browser receipt.</div>
-    <section class="stats" aria-label="Session statistics">
-      <div><span>CONNECTED</span><strong id="connected">0</strong></div>
-      <div><span>LIVE GROUP AVERAGE</span><strong id="average">— <small>bpm</small></strong></div>
-      <div><span>RECORDED SAMPLES</span><strong id="samples">0</strong></div>
-      <div><span>SESSION DURATION</span><strong id="duration">00:00:00</strong></div>
-    </section>
-    <section class="session panel" aria-label="Recording controls">
-      <div class="session-title"><span id="record-dot" class="dot"></span><div><h2 id="record-state">Choose an output folder</h2><p id="storage-state">An output folder is required before connecting and capturing data.</p></div></div>
-      <div class="session-controls"><label class="field">SESSION LABEL<input id="session-label" placeholder="e.g. Training session 01" maxlength="120"></label><button id="folder">Choose folder</button><button id="record" class="primary">▶ Resume capture</button><button id="retry" hidden>Retry folder writes</button></div>
-    </section>
-    <p id="error" class="notice danger" role="alert" hidden></p>
-    <div class="toolbar"><div><h2>Monitor dashboard <span id="device-count" class="count">0</span></h2><p>Heart rate &amp; the last 60 seconds of received readings</p></div><div class="toolbar-actions"><input id="search" type="search" aria-label="Filter devices" placeholder="Filter label or device…"><button id="demo">Try demo</button></div></div>
-    <div id="demo-notice" class="notice demo" hidden>SIMULATION MODE · Generated data only. Simulation is marked in every recorded row.</div>
-    <section id="devices" class="devices" aria-label="Heart rate monitors"></section>
-    <div id="empty" class="empty panel"><div class="empty-icon">♡</div><h2>Your monitors will appear here.</h2><p>Choose an output folder, then connect each strap using the Bluetooth chooser.<br>Capture starts automatically. Paired monitors reconnect while this page is open.</p><button id="empty-connect" class="primary">Connect your first monitor</button><small>Desktop Chrome or Edge · Bluetooth LE · HTTPS or localhost</small></div>
+<main>
+  <div class="heading">
+    <div><h1>Live heart rate</h1><p class="subtitle">Choose a folder, then connect your monitors. Capture starts automatically.</p></div>
+    <div class="capture-actions" role="group" aria-label="Capture controls">
+      <button id="folder">Choose folder</button>
+      <button id="connect" class="primary">＋ Connect monitor</button>
+      <button id="record">▶ Resume capture</button>
+      <button id="retry" hidden>Retry folder writes</button>
+    </div>
+  </div>
+  <div class="capture-status">
+    <span class="capture-state"><span id="record-dot" class="dot" aria-hidden="true"></span><span id="record-state" role="status">Choose a folder to begin</span></span>
+    <span id="storage-state">An output folder is required before capture.</span>
+  </div>
+  <div id="compatibility" class="notice" hidden></div>
+  <p id="error" class="notice danger" role="alert" hidden></p>
+  <section class="stats" aria-label="Capture statistics">
+    <div><span>CONNECTED</span><strong id="connected">0</strong></div>
+    <div><span>GROUP AVERAGE</span><strong id="average">— <small>bpm</small></strong></div>
+    <div><span>READINGS CAPTURED</span><strong id="samples">0</strong></div>
+    <div><span>CAPTURE DURATION</span><strong id="duration">00:00:00</strong></div>
+  </section>
+  <div class="toolbar">
+    <div><h2>Monitor Dashboard <span id="device-count" class="count">0</span></h2><p>Live readings and a 60-second trend for each monitor.</p></div>
+    <div class="toolbar-actions"><input id="search" type="search" aria-label="Filter devices" placeholder="Filter label or device…"><button id="demo">Try demo</button></div>
+  </div>
+  <div id="demo-notice" class="notice demo" hidden>SIMULATION MODE · Generated data only. Simulation is marked in every recorded row.</div>
+  <section id="devices" class="devices" aria-label="Heart rate monitors"></section>
+  <div id="empty" class="empty panel"><div class="empty-icon">♡</div><h2>No monitors connected yet</h2><p>Choose a folder above, then connect a heart rate monitor.<br>Each monitor appears here as a card.</p><button id="empty-connect" class="primary">Connect your first monitor</button></div>
+  <details class="tools">
+    <summary>Activity &amp; recovery</summary>
     <section class="bottom-grid">
-      <div class="panel events"><div class="section-heading"><h2>Session activity</h2><span class="eyebrow">LOCAL TIME</span></div><ol id="activity" aria-live="polite"><li class="muted">Waiting for your first connection.</li></ol></div>
-      <div class="panel recovery"><h2>Recordings &amp; recovery</h2><p>Folder recordings are closed CSV chunks, written every 5 seconds. A second copy is journaled in this browser.</p><div class="recovery-controls"><select id="saved" aria-label="Saved sessions"><option value="">No saved sessions</option></select><button id="export">Export recovery</button></div><small>Recovery downloads JSONL, including measurements, labels, and events. Keep this browser profile; private browsing or clearing site data removes recovery records.</small></div>
+      <div class="panel events"><div class="section-heading"><h2>Capture activity</h2><span class="eyebrow">LOCAL TIME</span></div><ol id="activity" aria-live="polite"><li class="muted">Waiting for your first connection.</li></ol></div>
+      <div class="panel recovery"><h2>Browser backup</h2><p>A local backup helps recover readings if folder saving is interrupted.</p><div class="recovery-controls"><select id="saved" aria-label="Saved recordings"><option value="">No saved recordings</option></select><button id="export">Export recovery</button></div><small>Downloads a JSONL backup. Clearing site data removes browser backups.</small></div>
     </section>
-    <footer><span>PULSEDECK / HR MONITOR</span><span>No account. No cloud data upload. Keep this tab open during collection.</span></footer>
-  </main>
-  <template id="device-template"><article class="device panel"><div class="device-top"><span class="device-index"></span><span class="device-status"></span></div><label class="label-wrap"><span class="sr-only">Participant label</span><input class="device-label" placeholder="Add participant label" maxlength="120"></label><p class="device-name"></p><div class="reading"><strong>—</strong><span>bpm</span><span class="contact"></span></div><canvas width="420" height="64" aria-label="Heart rate trend over the last 60 seconds" role="img"></canvas><div class="device-footer"><span class="last-seen">No samples yet</span><button class="device-action">Disconnect</button></div><div class="rr">RR interval —</div></article></template>
+  </details>
+  <footer><span>PULSEDECK</span><span>Keep this tab open during capture. Data stays on your computer.</span></footer>
+</main>
+<template id="device-template"><article class="device panel"><div class="device-top"><span class="device-index"></span><span class="device-status"></span></div><label class="label-wrap"><span class="sr-only">Participant label</span><input class="device-label" placeholder="Add participant label" maxlength="120"></label><p class="device-name"></p><div class="reading"><strong>—</strong><span>bpm</span><span class="contact"></span></div><canvas width="420" height="64" aria-label="Heart rate trend over the last 60 seconds" role="img"></canvas><div class="device-footer"><span class="last-seen">No samples yet</span><button class="device-action">Pause monitor</button></div><div class="rr">RR interval —</div></article></template>
 `;

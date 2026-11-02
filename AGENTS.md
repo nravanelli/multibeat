@@ -34,6 +34,8 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 
 ## Embedding and UI conventions
 
+- Keep Choose/Change folder, Connect monitor, and Pause/Resume capture together at the top. Do not add a session label field or a separate output-folder card. Prioritize individual monitor cards; keep activity and recovery in the expandable section below them.
+
 - Keep module imports relative. Resolve companion assets against `import.meta.url` so installation under a website subdirectory works.
 - Keep dashboard queries scoped to its shadow root. Avoid global IDs, global CSS assumptions, and changes to the host page.
 - Keep markup in `src/view.js`; do not create a second dashboard implementation in `index.html`.

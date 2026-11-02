@@ -18,7 +18,7 @@ export async function startDashboard(root) {
   function sessionMetadata() {
     return {
       session_id: 'pulse-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
-      application: 'PulseDeck', label: $('session-label').value.trim(), started_utc: new Date().toISOString(),
+      application: 'PulseDeck', started_utc: new Date().toISOString(),
       timestamp_basis: 'Browser receipt UTC (wall clock); elapsed_ms uses monotonic performance.now(). No sensor clock synchronization.',
       format_version: 1, mode: demoMode ? 'simulation' : 'bluetooth',
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name, label: d.label, simulated: d.simulated, status: d.status }))
@@ -44,11 +44,13 @@ export async function startDashboard(root) {
     $('empty-connect').disabled = !ready || demoMode;
     $('connect').title = ready ? 'Pair another heart rate monitor' : 'Choose an output folder and enable capture first';
     $('folder').disabled = !dbReady || settling || capture.recording || !!capture.starting;
-    $('session-label').disabled = settling || capture.recording || !!capture.starting;
+    $('folder').textContent = capture.directory ? 'Change folder' : 'Choose folder';
+    $('folder').title = capture.recording ? 'Pause capture to change the output folder' : capture.directory ? `Output folder: ${capture.directory.name}` : 'Choose where readings will be saved';
     $('demo').disabled = settling || !dbReady || !capture.directory || !demoMode && (!capture.enabled || capture.recording);
     $('record').disabled = !dbReady || !capture.directory || settling || !!capture.starting;
     $('record').textContent = capture.enabled ? 'Ⅱ Pause capture' : '▶ Resume capture';
-    $('record-state').textContent = capture.recording ? (connected ? demoMode ? 'Capturing simulated data' : 'Capturing live data' : 'Waiting for monitors to return') : capture.starting ? 'Preparing recording…' : !capture.directory ? 'Choose an output folder' : capture.enabled ? 'Ready — connect a monitor' : 'Capture paused';
+    const stateText = capture.recording ? (connected ? demoMode ? 'Capturing simulated data' : 'Capturing live data' : 'Waiting for monitors to return') : capture.starting ? 'Preparing recording…' : !capture.directory ? 'Choose a folder to begin' : capture.enabled ? 'Ready — connect a monitor' : 'Capture paused';
+    if ($('record-state').textContent !== stateText) $('record-state').textContent = stateText;
     $('record-dot').classList.toggle('active', capture.recording);
     $('samples').textContent = (recorder.count || 0).toLocaleString();
     $('retry').hidden = !recorder.diskError;
@@ -56,8 +58,8 @@ export async function startDashboard(root) {
     if (recorder.diskError || recorder.journalError) {
       $('storage-state').textContent = [recorder.diskError && `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes.`, recorder.journalError && `Browser recovery journal failed: ${recorder.journalError}. Recovery may be incomplete.`].filter(Boolean).join(' ');
     } else if (capture.recording && recorder.directory && recorder.id) {
-      $('storage-state').textContent = `${capture.directory.name}/${recorder.id} · ${recorder.part} chunks saved · ${recorder.pending.length} records pending`;
-    } else $('storage-state').textContent = capture.directory ? `Output: ${capture.directory.name} · Capture starts automatically on connection.` : 'An output folder is required before connecting and capturing data.';
+      $('storage-state').textContent = `Folder: ${capture.directory.name} · ${recorder.pending.length ? 'Saving readings…' : recorder.part ? 'Up to date' : 'Waiting for readings'}`;
+    } else $('storage-state').textContent = capture.directory ? `Folder: ${capture.directory.name}` : 'An output folder is required before capture.';
   }
   async function prepareCapture() {
     if (destroyed) throw new DOMException('Dashboard removed.', 'AbortError');
@@ -309,7 +311,7 @@ export async function startDashboard(root) {
     if (destroyed) return;
     $('saved').replaceChildren();
     for (const id of sessions) { const option = document.createElement('option'); option.value = id; option.textContent = id; $('saved').append(option); }
-    if (!sessions.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No saved sessions'; $('saved').append(option); }
+    if (!sessions.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No saved recordings'; $('saved').append(option); }
     if (sessions.includes(selected)) $('saved').value = selected;
     $('export').disabled = !sessions.length;
   }

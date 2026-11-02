@@ -41,13 +41,13 @@ Maintainers can run automated tests with `node --test`. No npm, package manager,
 
 ## Collect data
 
-1. Choose an output folder and grant read/write permission. A folder is mandatory for both physical monitors and the demo; there is no browser-only recording mode. Set an optional session label before connecting.
+1. Choose an output folder and grant read/write permission. A folder is mandatory for both physical monitors and the demo; there is no browser-only recording mode. Folder selection, Connect monitor, and Pause/Resume capture are grouped at the top. There is no session label to enter.
 2. Wear/activate each strap and disconnect competing apps if needed. Click **Connect monitor** and select a device in the Bluetooth chooser. Repeat for additional devices. There is no application-imposed connection limit or fixed target count.
 3. Capture starts automatically when the first monitor establishes its heart-rate service connection. PulseDeck prepares the session files before enabling notifications, so the first readings are included. Later monitors join the same session. There is no separate Start recording step.
 4. Set participant labels on each card. Labels are remembered in this browser profile. Measurements carry the label in effect at receipt; changes are logged as events. Prefer participant codes to personal names.
 5. If a monitor goes out of range, PulseDeck keeps the recording session open and retries the connection automatically. Readings resume in the same session when the connection succeeds. No missing measurements are fabricated or backfilled.
 6. Use **Pause monitor** to stop one monitor and its retries. Use **Reconnect** on that card to enable it again. **Pause capture** disconnects all monitors, cancels retries, and drains remaining writes. **Resume capture** enables automatic connections again; the next successful connection begins a new session. Monitors individually paused stay paused until explicitly reconnected.
-7. Check folder errors before closing the page. **Retry folder writes** retries retained batches. Pending failed writes must be saved before a new session can start. **Export recovery** downloads the selected session as JSONL, including metadata, measurements, and events.
+7. Open **Activity & recovery** below the device cards for capture events and browser backup export. Check folder errors before closing the page. **Retry folder writes** retries retained batches. Pending failed writes must be saved before a new session can start. **Export recovery** downloads the selected session as JSONL, including metadata, measurements, and events.
 
 Keep the page open and the computer awake. The app requests a screen wake lock when supported, but cannot guarantee operation during sleep, background throttling, or a closed tab. Folder writes are batched every five seconds; recovery is also journaled in this browser.
 
