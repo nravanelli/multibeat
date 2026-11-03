@@ -131,17 +131,20 @@ export async function startDashboard(root) {
     if (!simulated) d.manager = new ReconnectingMonitor(bluetooth, {
       beforeNotifications: prepareCapture,
       onSample: view => {
-        if (destroyed || !capture.enabled) return;
-        try { receive(d, parseHeartRate(view)); }
-        catch (e) { event('packet_error', `${d.name}: ${e.message}`, { device_id: d.id }); }
+        if (destroyed || !capture.enabled) return false;
+        try { receive(d, parseHeartRate(view)); return true; }
+        catch (e) { event('packet_error', `${d.name}: ${e.message}`, { device_id: d.id }); return false; }
       },
       onState: (state, detail) => {
         if (destroyed) return;
-        const previous = d.status; d.status = state;
+        const previous = d.status; d.status = state; d.reconnectReason = detail.reason;
         if (state === 'connecting') d.connectionStarted = performance.now();
         if (state === 'connected') { d.connectedAt = performance.now(); d.hasConnected = true; }
         if (state === 'connected') event('connected', `${d.label || d.name} connected; capturing data.`, { device_id: id, label: d.label, device_name: d.name });
-        if (state === 'reconnecting' && previous === 'connected') event('connection_lost', `${d.label || d.name}: signal lost. Reconnecting automatically.`, { device_id: id });
+        if (state === 'reconnecting' && previous === 'connected') {
+          if (detail.reason === 'no_data') event('stream_stalled', `${d.label || d.name}: no valid readings for 15 seconds. Refreshing the Bluetooth connection automatically.`, { device_id: id });
+          else event('connection_lost', `${d.label || d.name}: signal lost. Reconnecting automatically.`, { device_id: id });
+        }
         if (state === 'permission') error(`${d.name}: ${detail.message}. Restore Bluetooth permission, then reconnect.`);
         render();
       },

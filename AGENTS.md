@@ -57,7 +57,7 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 - `received_utc` is browser wall-clock receipt time. `elapsed_ms` uses monotonic `performance.now()`. Standard notifications do not supply synchronized sensor timestamps. Do not claim precise alignment between devices or absolute beat times.
 - Bluetooth selection and folder pickers need direct user gestures and browser permissions. Detect missing APIs and give actionable feedback.
 - Do not display a fixed connection target or cap. Actual capacity is hardware/browser dependent. Simulation and recorder tests do not establish physical radio capacity.
-- Restore only monitors paired through Beatstream when `getDevices()` is available. Retry dropped/out-of-range connections with capped backoff while capture is enabled. Explicitly pausing a monitor or capture must cancel retries. Do not promise reconnection while the page is closed or permission is unavailable.
+- Restore only monitors paired through Beatstream when `getDevices()` is available. Retry dropped/out-of-range connections with capped backoff while capture is enabled. A connection without valid notifications must be refreshed after 15 seconds; do not rely only on the browser disconnect event. Explicitly pausing a monitor or capture must cancel retries and the no-data watchdog. Do not promise reconnection while the page is closed or permission is unavailable.
 
 ## Recording and data integrity
 

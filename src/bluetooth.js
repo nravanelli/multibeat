@@ -14,10 +14,12 @@ export function parseHeartRate(view) {
 }
 
 export async function subscribe(device, onSample, onDisconnect, { beforeNotifications = async () => {}, signal } = {}) {
-  let characteristic, lost = false;
+  let characteristic, lost = false, cleaned = false;
   const notify = e => onSample(e.target.value);
   const disconnected = () => { lost = true; onDisconnect(); };
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     characteristic?.removeEventListener('characteristicvaluechanged', notify);
     device.removeEventListener('gattserverdisconnected', disconnected);
     signal?.removeEventListener('abort', cleanup);
@@ -42,10 +44,14 @@ export async function subscribe(device, onSample, onDisconnect, { beforeNotifica
   } catch (error) { cleanup(); throw error; }
 }
 
+export const NO_DATA_RECOVERY_MS = 15000;
+
 /** Reconnect indefinitely with capped backoff while enabled and the page is alive. */
 export class ReconnectingMonitor {
   constructor(device, { onSample, beforeNotifications, onState = () => {}, onError = () => {},
-    subscribeFn = subscribe, schedule = setTimeout, cancel = clearTimeout } = {}) {
+    subscribeFn = subscribe,
+    schedule = (fn, delay) => globalThis.setTimeout(fn, delay),
+    cancel = timer => globalThis.clearTimeout(timer) } = {}) {
     Object.assign(this, { device, onSample, beforeNotifications, onState, onError, subscribeFn, schedule, cancel });
     this.enabled = false;
     this.state = 'paused';
@@ -54,6 +60,8 @@ export class ReconnectingMonitor {
     this.cleanup = null;
     this.generation = 0;
     this.failures = 0;
+    this.watchdogTimer = null;
+    this.connectionToken = null;
   }
   setState(state, detail = {}) { this.state = state; this.onState(state, detail); }
   start() {
@@ -63,28 +71,54 @@ export class ReconnectingMonitor {
     if (this.attempt) return this.attempt.then(() => this.enabled && this.state !== 'connected' ? this.connect() : undefined);
     return this.connect();
   }
-  retry() {
+  clearWatchdog() {
+    if (this.watchdogTimer !== null) this.cancel(this.watchdogTimer);
+    this.watchdogTimer = null;
+  }
+  armWatchdog() {
+    this.clearWatchdog();
+    if (!this.enabled || this.state !== 'connected') return;
+    const token = this.connectionToken;
+    this.watchdogTimer = this.schedule(() => {
+      this.watchdogTimer = null;
+      if (!this.enabled || this.state !== 'connected' || token !== this.connectionToken) return;
+      this.connectionToken = null;
+      this.abort?.abort(); this.cleanup?.(); this.cleanup = null;
+      this.retry('no_data');
+    }, NO_DATA_RECOVERY_MS);
+  }
+  retry(reason = 'disconnected') {
+    this.clearWatchdog();
     if (!this.enabled || this.timer !== null) return;
     const delay = Math.min(1000 * 2 ** Math.min(this.failures++, 5), 30000);
-    this.setState('reconnecting', { delay });
-    this.timer = this.schedule(() => { this.timer = null; this.connect(); }, delay);
+    this.setState('reconnecting', { delay, reason });
+    this.timer = this.schedule(() => { this.timer = null; if (this.enabled) this.start(); }, delay);
   }
   connect() {
     if (!this.enabled || this.attempt) return this.attempt || Promise.resolve();
     const generation = this.generation;
+    const token = this.connectionToken = Symbol();
     this.abort = new AbortController();
     this.setState('connecting');
     this.attempt = (async () => {
       try {
-        const cleanup = await this.subscribeFn(this.device, this.onSample, () => {
+        const cleanup = await this.subscribeFn(this.device, value => {
+          if (!this.enabled || this.connectionToken !== token || generation !== this.generation) return;
+          // The consumer returns false for malformed or ignored notifications.
+          if (this.onSample?.(value) !== false) this.armWatchdog();
+        }, () => {
+          if (!this.enabled || this.connectionToken !== token || generation !== this.generation) return;
+          this.connectionToken = null;
           this.cleanup?.(); this.cleanup = null;
-          if (generation === this.generation) this.retry();
+          this.retry();
         }, { beforeNotifications: this.beforeNotifications, signal: this.abort.signal });
-        if (!this.enabled || generation !== this.generation) { cleanup(); return; }
+        if (!this.enabled || generation !== this.generation || this.connectionToken !== token) { cleanup(); return; }
         this.cleanup = cleanup; this.failures = 0;
         this.setState('connected');
+        this.armWatchdog();
       } catch (error) {
-        if (!this.enabled || generation !== this.generation) return;
+        if (!this.enabled || generation !== this.generation || this.connectionToken !== token) return;
+        this.connectionToken = null;
         this.onError(error);
         if (!this.enabled || generation !== this.generation) return;
         if (['SecurityError', 'NotAllowedError', 'NotSupportedError'].includes(error.name)) {
@@ -96,6 +130,7 @@ export class ReconnectingMonitor {
   }
   async stop() {
     this.enabled = false; this.generation++;
+    this.connectionToken = null; this.clearWatchdog();
     if (this.timer !== null) this.cancel(this.timer);
     this.timer = null;
     this.abort?.abort(); this.cleanup?.(); this.cleanup = null;

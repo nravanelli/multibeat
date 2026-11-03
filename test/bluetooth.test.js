@@ -52,3 +52,14 @@ test('aborted subscription cleans up even if a pending GATT connection resolves 
   await assert.rejects(subscribing, { name: 'AbortError' });
   assert.equal(notifications, 0);
 });
+
+test('abort followed by cleanup disconnects once and removes the notification listener', async () => {
+  const characteristic = new EventTarget(); characteristic.startNotifications = async () => {};
+  const device = new EventTarget(); let disconnects = 0, received = 0;
+  device.gatt = { connect: async () => ({ getPrimaryService: async () => ({ getCharacteristic: async () => characteristic }) }), disconnect: () => disconnects++ };
+  const abort = new AbortController();
+  const cleanup = await subscribe(device, () => received++, () => {}, { signal: abort.signal });
+  abort.abort(); cleanup(); cleanup();
+  characteristic.dispatchEvent(new Event('characteristicvaluechanged'));
+  assert.equal(disconnects, 1); assert.equal(received, 0);
+});

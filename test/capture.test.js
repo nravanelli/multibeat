@@ -101,3 +101,23 @@ test('participant label changes are saved on subsequent CSV rows without rewriti
   assert.match(s.text('session-1/measurements.csv'), /P01/);
   assert.match(s.text('session-1/measurements.csv'), /P02/);
 });
+
+test('silent-link recovery keeps the recording session, participant label, and CSV sequence', async () => {
+  const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume();
+  const timers = new Map(); let id = 0;
+  const manager = new ReconnectingMonitor(device, {
+    beforeNotifications: () => s.capture.prepare(), onSample: () => s.capture.measurement(device, sample),
+    schedule: fn => { const key = ++id; timers.set(key, fn); return key; }, cancel: key => timers.delete(key),
+    subscribeFn: async (device, onSample, onDisconnect, { beforeNotifications }) => {
+      await beforeNotifications(); onSample(); return () => {};
+    }
+  });
+  await manager.start(); await s.recorder.flush();
+  const watchdog = timers.get(manager.watchdogTimer); timers.delete(manager.watchdogTimer); watchdog();
+  const retry = timers.get(manager.timer); timers.delete(manager.timer); retry(); await manager.attempt;
+  await manager.stop(); await s.capture.pause();
+  const rows = s.records.filter(r => r.value.type === 'measurement').map(r => r.value.row);
+  assert.deepEqual(rows.map(row => [row.session_id, row.sequence, row.label]), [['session-1', 1, 'P01'], ['session-1', 2, 'P01']]);
+  assert.equal(s.text('session-1/measurements.csv').trim().split('\r\n').length, 3);
+  assert.equal(s.records.filter(r => r.value.type === 'session').length, 1);
+});

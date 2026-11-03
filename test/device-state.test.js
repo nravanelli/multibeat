@@ -41,3 +41,9 @@ test('initial connection, explicit pause, permissions, and simulation have disti
   assert.match(monitorDisplay({ status: 'permission' }, 100).note, /permission needed/);
   assert.equal(monitorDisplay({ ...connected, simulated: true }, 400).text, 'SIMULATED');
 });
+
+test('a silent-link refresh is explained on the offline row', () => {
+  const display = monitorDisplay({ ...connected, status: 'reconnecting', reconnectReason: 'no_data' }, 16000);
+  assert.equal(display.text, 'OFFLINE');
+  assert.match(display.note, /No readings.*reconnecting automatically/);
+});

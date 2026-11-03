@@ -11,6 +11,6 @@ export function monitorDisplay(device, now) {
   }
   if (connected) return { text: live ? device.simulated ? 'SIMULATED' : 'LIVE' : 'WAITING', offline: false, live, note: live ? '' : 'Waiting for readings…' };
   if (device.status === 'connecting' && !device.hasConnected) return { text: 'CONNECTING', offline: false, live: false, note: 'Connecting to monitor…' };
-  const note = device.status === 'permission' ? 'Bluetooth permission needed · reconnect after restoring access' : ['connecting', 'reconnecting'].includes(device.status) ? 'Connection lost · reconnecting automatically…' : device.manuallyPaused ? 'Monitor paused' : 'Not connected';
+  const note = device.status === 'permission' ? 'Bluetooth permission needed · reconnect after restoring access' : ['connecting', 'reconnecting'].includes(device.status) ? device.reconnectReason === 'no_data' ? 'No readings · reconnecting automatically…' : 'Connection lost · reconnecting automatically…' : device.manuallyPaused ? 'Monitor paused' : 'Not connected';
   return { text: 'OFFLINE', offline: true, live: false, note };
 }
