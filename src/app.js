@@ -106,13 +106,28 @@ export async function startDashboard(root) {
     detail.querySelector('.graph-range').onchange = render;
     const input = node.querySelector('.device-label'); input.value = d.label;
     input.setAttribute('aria-label', 'Participant label for ' + name);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
-    input.addEventListener('change', () => {
+    const update = node.querySelector('.label-update');
+    const feedback = node.querySelector('.label-feedback');
+    update.setAttribute('aria-label', 'Update participant label for ' + name);
+    d.updateLabelEditor = () => {
+      const changed = input.value.trim() !== d.label;
+      update.disabled = !changed;
+      const applied = d.label ? 'Applied: ' + d.label : 'No label set';
+      const message = changed ? 'Not applied · ' + applied : applied;
+      if (feedback.textContent !== message) feedback.textContent = message;
+      feedback.classList.toggle('pending', changed);
+    };
+    input.addEventListener('input', d.updateLabelEditor);
+    update.onclick = () => {
+      if (destroyed || input.value.trim() === d.label) return;
       const previous = d.label; d.label = input.value.trim(); input.value = d.label;
       savedLabels[id] = d.label;
       try { localStorage.setItem('hr-labels', JSON.stringify(savedLabels)); } catch { error('Labels cannot be saved between visits. Current labels will still be recorded.'); }
       event('label_changed', `${name}: label changed to ${d.label || '(none)'}`, { device_id: id, previous_label: previous, label: d.label });
-    });
+      d.updateLabelEditor();
+      render();
+    };
+    d.updateLabelEditor();
     if (!simulated) d.manager = new ReconnectingMonitor(bluetooth, {
       beforeNotifications: prepareCapture,
       onSample: view => {
@@ -185,6 +200,7 @@ export async function startDashboard(root) {
     let connected = 0; const live = [];
     for (const d of devices.values()) {
       const display = monitorDisplay(d, now);
+      d.updateLabelEditor();
       if (d.status === 'connected') connected++;
       if (display.live && d.last.contact !== false) live.push(d.last.bpm);
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);

@@ -24,7 +24,7 @@ export default `
     <div><span>CAPTURE DURATION</span><strong id="duration">00:00:00</strong></div>
   </section>
   <div class="toolbar">
-    <div><h2>Monitor Dashboard <span id="device-count" class="count">0</span></h2><p>Edit participant labels here; they are saved in each CSV row. Click a trend to expand.</p></div>
+    <div><h2>Monitor Dashboard <span id="device-count" class="count">0</span></h2><p>Use Update label to apply participant changes to new CSV rows. Click a trend to expand.</p></div>
     <div class="toolbar-actions"><input id="search" type="search" aria-label="Filter devices" placeholder="Filter label or device…"><button id="demo">Try demo</button></div>
   </div>
   <div id="demo-notice" class="notice demo" hidden>SIMULATION MODE · Generated data only. Simulation is marked in every recorded row.</div>
@@ -48,7 +48,7 @@ export default `
 <template id="device-template">
   <tr class="device">
     <th scope="row"><span class="device-index"></span><span class="device-name"></span></th>
-    <td><label><span class="sr-only">Participant label</span><input class="device-label" placeholder="e.g. P01" maxlength="120" title="Saved in CSV rows from the time this label is applied"></label></td>
+    <td><div class="label-editor"><label><span class="sr-only">Participant label</span><input class="device-label" placeholder="e.g. P01" maxlength="120" title="Type a label, then click Update label to apply it to new readings"></label><button class="label-update" type="button" disabled>Update label</button></div><p class="label-feedback" role="status">No label set</p></td>
     <td class="status-cell"><span class="device-status" role="status"></span><p class="connection-note" hidden></p></td>
     <td><div class="reading"><strong>—</strong><span>bpm</span></div><span class="contact"></span><div class="rr">RR interval unavailable</div></td>
     <td><button class="trend-toggle" aria-expanded="false" title="Expand heart rate history"><canvas class="mini-trend" width="300" height="64" role="img" aria-label="Heart rate trend over the last 60 seconds"></canvas><span class="trend-hint">Expand graph ↗</span></button></td>
