@@ -5,7 +5,9 @@ export function csvCell(value) {
   if (/^[=+@\-\t\r]/.test(s)) s = "'" + s;
   return /[",\r\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
 }
-export const csv = rows => COLUMNS.join(',') + '\r\n' + rows.map(row => COLUMNS.map(k => csvCell(row[k])).join(',')).join('\r\n') + '\r\n';
+export const CSV_HEADER = COLUMNS.join(',') + '\r\n';
+export const csvRows = rows => rows.map(row => COLUMNS.map(k => csvCell(row[k])).join(',') + '\r\n').join('');
+export const csv = rows => CSV_HEADER + csvRows(rows);
 
 export class Journal {
   async open() {
@@ -41,16 +43,20 @@ export class Journal {
 }
 
 export class Recorder {
-  constructor(journal, onStatus = () => {}) { this.journal = journal; this.onStatus = onStatus; this.tail = Promise.resolve(); this.active = false; this.pending = []; this.part = 0; this.diskError = null; this.journalError = null; }
+  constructor(journal, onStatus = () => {}) { this.journal = journal; this.onStatus = onStatus; this.tail = Promise.resolve(); this.active = false; this.pending = []; this.savedBatches = 0; this.diskError = null; this.journalError = null; }
   async start(directory, metadata) {
     if (!directory) throw new Error('Choose an output folder before capturing data.');
     if (this.active) throw new Error('A recording session is already active.');
     if (this.pending.length) throw new Error('Save pending folder writes before starting another session.');
     this.id = metadata.session_id;
     this.directory = await directory.getDirectoryHandle(this.id, { create: true });
-    this.pending = []; this.part = 0; this.diskError = null; this.journalError = null; this.count = 0;
+    this.pending = []; this.savedBatches = 0; this.diskError = null; this.journalError = null; this.count = 0;
     await this.journal.add(this.id, { type: 'session', ...metadata });
-    if (this.directory) await this.write('session.json', JSON.stringify(metadata, null, 2));
+    await this.write('session.json', JSON.stringify(metadata, null, 2));
+    await this.write('measurements.csv', CSV_HEADER);
+    await this.write('events.jsonl', '');
+    this.csvOffset = new TextEncoder().encode(CSV_HEADER).byteLength;
+    this.eventOffset = 0;
     this.active = true;
   }
   enqueue(value) {
@@ -70,18 +76,33 @@ export class Recorder {
     try { await stream.write(body); await stream.close(); }
     catch (error) { try { await stream.abort(); } catch {} throw error; }
   }
+  async appendAt(name, body, offset) {
+    const handle = await this.directory.getFileHandle(name);
+    if ((await handle.getFile()).size < offset) throw new Error(name + ' was shortened or replaced. Preserve the file and export browser recovery.');
+    const bytes = new TextEncoder().encode(body);
+    const stream = await handle.createWritable({ keepExistingData: true });
+    try {
+      // Retry from the last acknowledged byte offset, including after an ambiguous close.
+      // Preserve all committed data; overwrite only this batch's unacknowledged tail.
+      await stream.seek(offset);
+      await stream.write(bytes);
+      await stream.truncate(offset + bytes.byteLength);
+      await stream.close();
+      return offset + bytes.byteLength;
+    } catch (error) { try { await stream.abort(); } catch {} throw error; }
+  }
   flush() {
     this.tail = this.tail.then(async () => {
       if (!this.directory || !this.pending.length) return;
-      // Fixed part name on retry makes a failed batch idempotent.
       const batch = this.pending.slice(0, 500);
-      const part = String(this.part + 1).padStart(6, '0');
       try {
         const rows = batch.filter(v => v.type === 'measurement').map(v => v.row);
         const events = batch.filter(v => v.type !== 'measurement');
-        if (rows.length) await this.write(`measurements-${part}.csv`, csv(rows));
-        if (events.length) await this.write(`events-${part}.jsonl`, events.map(v => JSON.stringify(v)).join('\n') + '\n');
-        this.pending.splice(0, batch.length); this.part++; this.diskError = null;
+        const csvOffset = rows.length ? await this.appendAt('measurements.csv', csvRows(rows), this.csvOffset) : this.csvOffset;
+        const eventOffset = events.length ? await this.appendAt('events.jsonl', events.map(v => JSON.stringify(v)).join('\n') + '\n', this.eventOffset) : this.eventOffset;
+        // A batch is acknowledged only after both files close successfully.
+        this.csvOffset = csvOffset; this.eventOffset = eventOffset;
+        this.pending.splice(0, batch.length); this.savedBatches++; this.diskError = null;
       } catch (e) { this.diskError = e.message; }
       this.onStatus();
     });

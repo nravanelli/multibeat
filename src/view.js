@@ -24,12 +24,18 @@ export default `
     <div><span>CAPTURE DURATION</span><strong id="duration">00:00:00</strong></div>
   </section>
   <div class="toolbar">
-    <div><h2>Monitor Dashboard <span id="device-count" class="count">0</span></h2><p>Live readings and a 60-second trend for each monitor.</p></div>
+    <div><h2>Monitor Dashboard <span id="device-count" class="count">0</span></h2><p>Edit participant labels here; they are saved in each CSV row. Click a trend to expand.</p></div>
     <div class="toolbar-actions"><input id="search" type="search" aria-label="Filter devices" placeholder="Filter label or device…"><button id="demo">Try demo</button></div>
   </div>
   <div id="demo-notice" class="notice demo" hidden>SIMULATION MODE · Generated data only. Simulation is marked in every recorded row.</div>
-  <section id="devices" class="devices" aria-label="Heart rate monitors"></section>
-  <div id="empty" class="empty panel"><div class="empty-icon">♡</div><h2>No monitors connected yet</h2><p>Choose a folder above, then connect a heart rate monitor.<br>Each monitor appears here as a card.</p><button id="empty-connect" class="primary">Connect your first monitor</button></div>
+  <div class="device-table-wrap" tabindex="0" role="region" aria-label="Monitor dashboard table, scroll horizontally on smaller screens">
+    <table class="device-table">
+      <caption class="sr-only">Heart rate monitors, participant labels, connection status, and live trends</caption>
+      <thead><tr><th scope="col">Device</th><th scope="col">Participant label</th><th scope="col">Status</th><th scope="col">Heart rate</th><th scope="col">Last 60 seconds</th><th scope="col">Last reading</th><th scope="col"><span class="sr-only">Monitor controls</span></th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </div>
+  <div id="empty" class="empty panel"><div class="empty-icon">♡</div><h2>No monitors connected yet</h2><p>Choose a folder above, then connect a heart rate monitor.<br>Each monitor appears here as a row.</p><button id="empty-connect" class="primary">Connect your first monitor</button></div>
   <details class="tools">
     <summary>Activity &amp; recovery</summary>
     <section class="bottom-grid">
@@ -39,5 +45,22 @@ export default `
   </details>
   <footer><span>BEATSTREAM</span><span>Keep this tab open during capture. Data stays on your computer.</span></footer>
 </main>
-<template id="device-template"><article class="device panel"><div class="device-top"><span class="device-index"></span><span class="device-status" role="status"></span></div><p class="connection-note" hidden></p><label class="label-wrap"><span class="sr-only">Participant label</span><input class="device-label" placeholder="Add participant label" maxlength="120"></label><p class="device-name"></p><div class="reading"><strong>—</strong><span>bpm</span><span class="contact"></span></div><canvas width="420" height="64" aria-label="Heart rate trend over the last 60 seconds" role="img"></canvas><div class="device-footer"><span class="last-seen">No samples yet</span><button class="device-action">Pause monitor</button></div><div class="rr">RR interval —</div></article></template>
+<template id="device-template">
+  <tr class="device">
+    <th scope="row"><span class="device-index"></span><span class="device-name"></span></th>
+    <td><label><span class="sr-only">Participant label</span><input class="device-label" placeholder="e.g. P01" maxlength="120" title="Saved in CSV rows from the time this label is applied"></label></td>
+    <td class="status-cell"><span class="device-status" role="status"></span><p class="connection-note" hidden></p></td>
+    <td><div class="reading"><strong>—</strong><span>bpm</span></div><span class="contact"></span><div class="rr">RR interval unavailable</div></td>
+    <td><button class="trend-toggle" aria-expanded="false" title="Expand heart rate history"><canvas class="mini-trend" width="300" height="64" role="img" aria-label="Heart rate trend over the last 60 seconds"></canvas><span class="trend-hint">Expand graph ↗</span></button></td>
+    <td class="last-seen">No samples yet</td>
+    <td><button class="device-action">Pause monitor</button></td>
+  </tr>
+  <tr class="device-detail" hidden><td colspan="7">
+    <section class="expanded-trend" aria-label="Expanded heart rate history">
+      <div class="graph-heading"><h3 class="graph-title">Heart rate history</h3><div class="graph-actions"><label>Show <select class="graph-range" aria-label="Heart rate history time window"><option value="60000">Last minute</option><option value="300000">Last 5 minutes</option><option value="1800000" selected>Last 30 minutes</option></select></label><button class="graph-close">Close graph</button></div></div>
+      <canvas class="history-chart" width="1100" height="280" role="img" aria-label="Heart rate history with time and beats per minute axes"></canvas>
+      <p class="graph-note">Up to 30 minutes of history from this page. Gaps indicate missing readings.</p>
+    </section>
+  </td></tr>
+</template>
 `;

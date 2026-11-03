@@ -2,6 +2,7 @@ import { parseHeartRate, ReconnectingMonitor } from './bluetooth.js';
 import { Journal, Recorder } from './recorder.js';
 import { CaptureSession } from './capture.js';
 import { monitorDisplay } from './device-state.js';
+import { appendTrend, drawTrend } from './trends.js';
 
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
@@ -22,7 +23,7 @@ export async function startDashboard(root) {
       session_id: 'beatstream-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
       application: 'Beatstream', started_utc: new Date().toISOString(),
       timestamp_basis: 'Browser receipt UTC (wall clock); elapsed_ms uses monotonic performance.now(). No sensor clock synchronization.',
-      format_version: 1, mode: demoMode ? 'simulation' : 'bluetooth',
+      format_version: 2, measurement_file: 'measurements.csv', event_file: 'events.jsonl', mode: demoMode ? 'simulation' : 'bluetooth',
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name, label: d.label, simulated: d.simulated, status: d.status }))
     };
   }
@@ -60,7 +61,7 @@ export async function startDashboard(root) {
     if (recorder.diskError || recorder.journalError) {
       $('storage-state').textContent = [recorder.diskError && `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes.`, recorder.journalError && `Browser recovery journal failed: ${recorder.journalError}. Recovery may be incomplete.`].filter(Boolean).join(' ');
     } else if (capture.recording && recorder.directory && recorder.id) {
-      $('storage-state').textContent = `Folder: ${capture.directory.name} · ${recorder.pending.length ? 'Saving readings…' : recorder.part ? 'Up to date' : 'Waiting for readings'}`;
+      $('storage-state').textContent = `Folder: ${capture.directory.name} · ${recorder.pending.length ? 'Saving readings…' : recorder.savedBatches ? 'Up to date' : 'Waiting for readings'}`;
     } else $('storage-state').textContent = capture.directory ? `Folder: ${capture.directory.name}` : 'An output folder is required before capture.';
   }
   async function prepareCapture() {
@@ -84,13 +85,28 @@ export async function startDashboard(root) {
   }
   let sessionStartedEvent = false;
   function makeDevice(id, name, simulated = false, bluetooth = null) {
-    const node = $('device-template').content.firstElementChild.cloneNode(true);
-    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], node, manuallyPaused: false, manager: null };
-    devices.set(id, d); $('devices').append(node);
+    const fragment = $('device-template').content.cloneNode(true);
+    const node = fragment.querySelector('.device');
+    const detail = fragment.querySelector('.device-detail');
+    detail.id = 'trend-' + crypto.randomUUID();
+    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], node, detail, expanded: false, manuallyPaused: false, manager: null };
+    devices.set(id, d); $('devices').append(fragment);
     node.querySelector('.device-index').textContent = `${simulated ? 'DEMO' : 'MONITOR'} ${String(devices.size).padStart(2, '0')}`;
     node.querySelector('.device-name').textContent = `${name} · ${id}`;
     node.querySelector('.device-name').title = `${name} · ${id}`;
+    const toggle = node.querySelector('.trend-toggle');
+    toggle.setAttribute('aria-controls', detail.id);
+    const toggleGraph = expanded => {
+      d.expanded = expanded;
+      toggle.setAttribute('aria-expanded', String(expanded));
+      render();
+    };
+    toggle.onclick = () => toggleGraph(!d.expanded);
+    detail.querySelector('.graph-close').onclick = () => { toggleGraph(false); toggle.focus(); };
+    detail.querySelector('.graph-range').onchange = render;
     const input = node.querySelector('.device-label'); input.value = d.label;
+    input.setAttribute('aria-label', 'Participant label for ' + name);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
     input.addEventListener('change', () => {
       const previous = d.label; d.label = input.value.trim(); input.value = d.label;
       savedLabels[id] = d.label;
@@ -152,25 +168,16 @@ export async function startDashboard(root) {
     if (destroyed || !capture.enabled) return;
     const monotonic = performance.now(), utc = new Date().toISOString();
     d.last = { ...sample, at: monotonic, utc };
-    d.history.push({ at: monotonic, bpm: sample.bpm });
-    while (d.history.length && (d.history[0].at < monotonic - 60000 || d.history.length > 300)) d.history.shift();
+    appendTrend(d.history, monotonic, sample.bpm);
     capture.measurement(d, sample, { utc, monotonic });
   }
   function draw(d, now) {
-    const ctx = d.node.querySelector('canvas').getContext('2d');
-    ctx.clearRect(0, 0, 420, 64); ctx.strokeStyle = '#eef2ed'; ctx.lineWidth = 1;
-    for (const y of [16, 40, 63]) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(420, y); ctx.stroke(); }
-    const points = d.history.filter(p => now - p.at < 60000);
-    if (!points.length) return;
-    const min = Math.min(...points.map(p => p.bpm)) - 8, max = Math.max(...points.map(p => p.bpm)) + 8;
-    ctx.strokeStyle = d.simulated ? '#9676ad' : '#358065'; ctx.lineWidth = 2; ctx.beginPath();
-    let previous;
-    for (const p of points) {
-      const x = 420 * (1 - (now - p.at) / 60000), y = 58 - (p.bpm - min) / (max - min) * 50;
-      if (!previous || p.at - previous.at > 5000) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      previous = p;
-    }
-    ctx.stroke();
+    if (d.node.hidden) return;
+    drawTrend(d.node.querySelector('.mini-trend'), d.history, { now, simulated: d.simulated });
+    if (d.expanded) drawTrend(d.detail.querySelector('.history-chart'), d.history, {
+      now, simulated: d.simulated, detailed: true,
+      windowMs: Number(d.detail.querySelector('.graph-range').value)
+    });
   }
   function render() {
     if (destroyed) return;
@@ -181,6 +188,9 @@ export async function startDashboard(root) {
       if (d.status === 'connected') connected++;
       if (display.live && d.last.contact !== false) live.push(d.last.bpm);
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);
+      d.detail.hidden = !d.expanded || d.node.hidden;
+      d.node.querySelector('.trend-toggle').setAttribute('aria-label', (d.expanded ? 'Collapse' : 'Expand') + ' heart rate history for ' + (d.label || d.name));
+      d.detail.querySelector('.graph-title').textContent = (d.label || d.name) + ' · Heart rate history';
       const status = d.node.querySelector('.device-status');
       if (status.textContent !== display.text) status.textContent = display.text;
       status.className = 'device-status' + (display.offline ? ' offline' : !display.live ? ' stale' : '');
@@ -189,7 +199,7 @@ export async function startDashboard(root) {
       note.textContent = display.note; note.hidden = !display.note;
       d.node.querySelector('.reading strong').textContent = display.live ? d.last.bpm : '—';
       d.node.querySelector('.contact').textContent = display.live && d.last.contact === false ? 'No skin contact' : '';
-      d.node.querySelector('.last-seen').textContent = d.last ? `Last reading ${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
+      d.node.querySelector('.last-seen').textContent = d.last ? `${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
       d.node.querySelector('.rr').textContent = display.live && d.last.rrMs.length ? `RR ${d.last.rrMs.map(n => Math.round(n)).join(' / ')} ms` : 'RR interval unavailable';
       const action = d.node.querySelector('.device-action');
       action.textContent = d.manager?.enabled || d.simulated && d.status === 'connected' ? 'Pause monitor' : 'Reconnect';
@@ -274,7 +284,7 @@ export async function startDashboard(root) {
     try {
       if (demoMode) {
         await pauseCapture(); clearInterval(demoTimer); demoTimer = null; demoMode = false;
-        for (const [id,d] of devices) if (d.simulated) { d.node.remove(); devices.delete(id); }
+        for (const [id,d] of devices) if (d.simulated) { d.node.remove(); d.detail.remove(); devices.delete(id); }
         $('demo').textContent = 'Try demo'; $('demo-notice').hidden = true;
         capture.resume(); event('demo_stopped', 'Simulation ended.');
         return;
@@ -303,7 +313,7 @@ export async function startDashboard(root) {
     } catch (e) {
       if (demoMode && demoTimer === null) {
         demoMode = false;
-        for (const [id, d] of devices) if (d.simulated) { d.node.remove(); devices.delete(id); }
+        for (const [id, d] of devices) if (d.simulated) { d.node.remove(); d.detail.remove(); devices.delete(id); }
         $('demo-notice').hidden = true;
         $('demo').textContent = 'Try demo';
       }

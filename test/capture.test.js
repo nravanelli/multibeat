@@ -3,19 +3,17 @@ import assert from 'node:assert/strict';
 import { CaptureSession } from '../src/capture.js';
 import { Recorder } from '../src/recorder.js';
 import { ReconnectingMonitor } from '../src/bluetooth.js';
+import { memoryDirectory } from '../test-support/memory-directory.js';
 
 const sample = { bpm: 72, contact: true, energy: null, rr: [1024], rrMs: [1000] };
 const device = { id: 'one', name: 'HRM', label: 'P01', simulated: false };
 function setup() {
-  const records = [], files = new Map(); let starts = 0;
+  const records = []; let starts = 0;
   const journal = { add: async (session, value) => records.push({ session, value }) };
-  const directory = { name: 'output', getDirectoryHandle: async () => directory,
-    getFileHandle: async name => ({ createWritable: async () => {
-      let data; return { write: async value => { data = value; }, close: async () => files.set(name, data), abort: async () => {} };
-    } }) };
+  const { directory, files, text } = memoryDirectory();
   const recorder = new Recorder(journal);
   const capture = new CaptureSession(recorder, { metadata: () => ({ session_id: `session-${++starts}` }) });
-  return { capture, recorder, directory, records, files };
+  return { capture, recorder, directory, records, files, text };
 }
 test('capture cannot be enabled or started without an output folder', async () => {
   const { capture, records } = setup();
@@ -84,9 +82,22 @@ test('pause drains files; resume prepares a new session with fresh labels and se
   const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume(); await s.capture.prepare();
   s.capture.measurement(device, sample); await s.capture.pause();
   assert.equal(s.capture.measurement(device, sample), false);
-  assert.match(s.files.get('measurements-000001.csv'), /P01/);
+  assert.match(s.text('session-1/measurements.csv'), /P01/);
   s.capture.resume(); await s.capture.prepare();
   s.capture.measurement({ ...device, label: 'P02' }, sample); await s.capture.pause();
   const rows = s.records.filter(r => r.value.type === 'measurement');
   assert.deepEqual(rows.map(r => [r.session, r.value.row.sequence, r.value.row.label]), [['session-1', 1, 'P01'], ['session-2', 1, 'P02']]);
+});
+
+test('participant label changes are saved on subsequent CSV rows without rewriting earlier rows', async () => {
+  const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume(); await s.capture.prepare();
+  const participant = { ...device, label: 'P01' };
+  s.capture.measurement(participant, sample);
+  participant.label = 'P02';
+  s.capture.measurement(participant, sample);
+  await s.capture.pause();
+  const rows = s.records.filter(r => r.value.type === 'measurement').map(r => r.value.row);
+  assert.deepEqual(rows.map(r => r.label), ['P01', 'P02']);
+  assert.match(s.text('session-1/measurements.csv'), /P01/);
+  assert.match(s.text('session-1/measurements.csv'), /P02/);
 });

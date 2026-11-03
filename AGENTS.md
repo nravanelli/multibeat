@@ -20,7 +20,8 @@ Build Beatstream, a generic browser-only heart-rate acquisition dashboard for Po
 | `hr-monitor.js` | Public mount API, shadow root, relative asset loading, teardown wrapper |
 | `src/app.js` | Dashboard interaction, paired-device restoration, timers, labels, demo, recovery export |
 | `src/capture.js` | Required output folder, automatic session setup, measurement sequence, pause/resume |
-| `src/device-state.js` | Card freshness/offline status and first-reading timeout |
+| `src/trends.js` | Bounded 30-minute display history and compact/expanded canvas graphs |
+| `src/device-state.js` | Row freshness/offline status and first-reading timeout |
 | `src/view.js` | Static dashboard markup, including control IDs and the device template |
 | `styles.css` | Responsive dashboard styles, including `:host` for embedding |
 | `src/bluetooth.js` | Standard BLE decoding, cancellable subscriptions, automatic reconnection with backoff |
@@ -35,13 +36,13 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 
 ## Embedding and UI conventions
 
-- Keep Choose/Change folder, Connect monitor, and Pause/Resume capture together at the top. Do not add a session label field or a separate output-folder card. Prioritize individual monitor cards; keep activity and recovery in the expandable section below them.
+- Keep Choose/Change folder, Connect monitor, and Pause/Resume capture together at the top. Do not add a session label field or a separate output-folder card. Prioritize a table with one row per monitor and an expandable trend graph; keep activity and recovery in the expandable section below them.
 
 - Keep module imports relative. Resolve companion assets against `import.meta.url` so installation under a website subdirectory works.
 - Keep dashboard queries scoped to its shadow root. Avoid global IDs, global CSS assumptions, and changes to the host page.
 - Keep markup in `src/view.js`; do not create a second dashboard implementation in `index.html`.
 - Use `textContent` or DOM methods for labels, advertised device names, and error messages. Never interpolate user/device data into HTML. The existing template HTML is static repository content.
-- Keep disconnected or silent monitor cards visible with an explicit OFFLINE badge, last-reading time, and reconnection/pause reason. Do not display old heart rate or RR values as current readings.
+- Keep disconnected or silent monitor rows visible with an explicit OFFLINE badge, last-reading time, and reconnection/pause reason. Do not display old heart rate or RR values as current readings.
 - Preserve accessible labels, keyboard operation, visible errors, and responsive layouts. Do not add remote fonts or other network assets.
 - Clean up connections, listeners, timers, and wake locks on teardown. Check asynchronous connection and recording transitions when changing lifecycle behavior.
 - Keep the demo visibly marked, with `simulated=true` in every generated measurement. Do not silently substitute demo values for missing physical-device data.
@@ -61,8 +62,8 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 
 - An output folder is required before pairing/connecting for capture. Automatically prepare a recording when the first monitor connects, before enabling notifications, so its first sample is captured. Do not add a separate manual start step or a browser-only recording mode. Keep a session open across temporary device dropouts; explicit pause stops capture and reconnection.
 - Preserve the IndexedDB journal and folder recording paths. Make storage failures visible and distinguish folder failure from recovery-journal failure.
-- Keep write operations ordered. Do not remove pending data or advance a chunk number until the corresponding writes close successfully. Retrying a failed chunk must not duplicate measurements across completed chunks.
-- The current folder format is `session.json`, numbered measurement CSV chunks, and event JSONL chunks. CSV chunks share the column schema exported by `COLUMNS` in `src/recorder.js`.
+- Keep write operations ordered. Do not remove pending data or advance acknowledged file byte offsets until the corresponding measurement and event writes both close successfully. A failed or ambiguous close must be retried at the same byte offsets without duplicating rows. Use UTF-8 byte lengths, not JavaScript string lengths.
+- The current version-2 folder format is `session.json`, one `measurements.csv` for all devices in the session, and one `events.jsonl`. Append and close periodically; do not create new files per notification or flush. Keep a single CSV header. Existing version-1 numbered files remain readable. The CSV schema is exported by `COLUMNS` in `src/recorder.js`.
 - Preserve session/device identity, measurement sequence, receipt timestamps, labels at receipt, simulation markers, and reported optional values. Record label and connection changes as events.
 - Treat schema changes as compatibility changes: update metadata/versioning as needed, serialization, recovery behavior, tests, and README together. Keep existing saved sessions readable where practical.
 - Preserve CSV quoting and spreadsheet formula escaping. JSONL recovery should retain original strings.
@@ -91,7 +92,7 @@ When entry points, imports, asset paths, MIME handling, or the server change, ru
 node scripts/smoke.js
 ```
 
-The smoke check needs permission to bind a localhost port and port 5173 to be free. It checks asset responses, not browser rendering or physical Bluetooth. Do not stop another process to free the port without establishing that it belongs to this task.
+If the preview is already running, use `node scripts/smoke.js --reuse-server` to check it without starting or stopping a server. Otherwise, the smoke check needs permission to bind a localhost port and port 5173 to be free. It checks asset responses, not browser rendering or physical Bluetooth. Do not stop another process to free the port without establishing that it belongs to this task.
 
 Use focused regression tests for protocol parsing, storage ordering/failure/retry, schema changes, and lifecycle bugs. Avoid installing a test framework or writing tests that only repeat implementation details. Documentation-only changes do not require running the application suite.
 
