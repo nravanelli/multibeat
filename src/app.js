@@ -3,6 +3,7 @@ import { Journal, Recorder } from './recorder.js';
 import { CaptureSession } from './capture.js';
 import { monitorDisplay } from './device-state.js';
 import { appendTrend, drawTrend } from './trends.js';
+import { RespirationEstimator, RESPIRATION_CONFIG } from './respiration.js';
 
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
@@ -23,7 +24,7 @@ export async function startDashboard(root) {
       session_id: 'beatstream-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
       application: 'Beatstream', started_utc: new Date().toISOString(),
       timestamp_basis: 'Browser receipt UTC (wall clock); elapsed_ms uses monotonic performance.now(). No sensor clock synchronization.',
-      format_version: 2, measurement_file: 'measurements.csv', event_file: 'events.jsonl', mode: demoMode ? 'simulation' : 'bluetooth',
+      format_version: 3, respiration_estimation: RESPIRATION_CONFIG, measurement_file: 'measurements.csv', event_file: 'events.jsonl', mode: demoMode ? 'simulation' : 'bluetooth',
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name, label: d.label, simulated: d.simulated, status: d.status }))
     };
   }
@@ -89,21 +90,27 @@ export async function startDashboard(root) {
     const node = fragment.querySelector('.device');
     const detail = fragment.querySelector('.device-detail');
     detail.id = 'trend-' + crypto.randomUUID();
-    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], node, detail, expanded: false, manuallyPaused: false, manager: null };
+    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], rrHistory: [], respiration: new RespirationEstimator(), respiratoryEstimate: null, node, detail, expanded: false, expandedMetric: 'hr', manuallyPaused: false, manager: null };
     devices.set(id, d); $('devices').append(fragment);
     node.querySelector('.device-index').textContent = `${simulated ? 'DEMO' : 'MONITOR'} ${String(devices.size).padStart(2, '0')}`;
     node.querySelector('.device-name').textContent = `${name} · ${id}`;
     node.querySelector('.device-name').title = `${name} · ${id}`;
-    const toggle = node.querySelector('.trend-toggle');
-    toggle.setAttribute('aria-controls', detail.id);
-    const toggleGraph = expanded => {
-      d.expanded = expanded;
-      toggle.setAttribute('aria-expanded', String(expanded));
-      render();
+    const toggles = [...node.querySelectorAll('.trend-toggle')];
+    for (const toggle of toggles) {
+      toggle.setAttribute('aria-controls', detail.id);
+      toggle.onclick = () => {
+        d.expanded = !(d.expanded && d.expandedMetric === toggle.dataset.metric);
+        d.expandedMetric = toggle.dataset.metric;
+        detail.querySelector('.graph-metric').value = d.expandedMetric;
+        render();
+      };
+    }
+    detail.querySelector('.graph-close').onclick = () => {
+      d.expanded = false; render();
+      toggles.find(toggle => toggle.dataset.metric === d.expandedMetric).focus();
     };
-    toggle.onclick = () => toggleGraph(!d.expanded);
-    detail.querySelector('.graph-close').onclick = () => { toggleGraph(false); toggle.focus(); };
     detail.querySelector('.graph-range').onchange = render;
+    detail.querySelector('.graph-metric').onchange = e => { d.expandedMetric = e.target.value; render(); };
     const input = node.querySelector('.device-label'); input.value = d.label;
     input.setAttribute('aria-label', 'Participant label for ' + name);
     const update = node.querySelector('.label-update');
@@ -121,6 +128,7 @@ export async function startDashboard(root) {
     update.onclick = () => {
       if (destroyed || input.value.trim() === d.label) return;
       const previous = d.label; d.label = input.value.trim(); input.value = d.label;
+      d.respiration.reset('label_changed'); d.respiratoryEstimate = d.respiration.result;
       savedLabels[id] = d.label;
       try { localStorage.setItem('hr-labels', JSON.stringify(savedLabels)); } catch { error('Labels cannot be saved between visits. Current labels will still be recorded.'); }
       event('label_changed', `${name}: label changed to ${d.label || '(none)'}`, { device_id: id, previous_label: previous, label: d.label });
@@ -139,6 +147,7 @@ export async function startDashboard(root) {
         if (destroyed) return;
         const previous = d.status; d.status = state; d.reconnectReason = detail.reason;
         if (state === 'connecting') d.connectionStarted = performance.now();
+        if (state !== 'connected') { d.respiration.reset(state === 'paused' ? 'paused' : 'gap_reset'); d.respiratoryEstimate = d.respiration.result; }
         if (state === 'connected') { d.connectedAt = performance.now(); d.hasConnected = true; }
         if (state === 'connected') event('connected', `${d.label || d.name} connected; capturing data.`, { device_id: id, label: d.label, device_name: d.name });
         if (state === 'reconnecting' && previous === 'connected') {
@@ -154,7 +163,7 @@ export async function startDashboard(root) {
       if (destroyed || busy) return;
       if (d.manager?.enabled || simulated && d.status === 'connected') {
         d.manuallyPaused = true;
-        if (d.manager) await d.manager.stop(); else d.status = 'paused';
+        if (d.manager) await d.manager.stop(); else { d.status = 'paused'; d.respiration.reset('paused'); d.respiratoryEstimate = d.respiration.result; }
         event('monitor_paused', `${d.label || d.name} paused; automatic reconnection disabled for this monitor.`, { device_id: id });
       } else if (capture.enabled) {
         d.manuallyPaused = false;
@@ -187,15 +196,27 @@ export async function startDashboard(root) {
     const monotonic = performance.now(), utc = new Date().toISOString();
     d.last = { ...sample, at: monotonic, utc };
     appendTrend(d.history, monotonic, sample.bpm);
+    d.respiratoryEstimate = d.respiration.add(sample, monotonic);
+    for (const point of d.respiration.lastBatch) appendTrend(d.rrHistory, point.at, point.rrMs, { everyMs: 0, maxPoints: 8000 });
     capture.measurement(d, sample, { utc, monotonic });
   }
   function draw(d, now) {
     if (d.node.hidden) return;
-    drawTrend(d.node.querySelector('.mini-trend'), d.history, { now, simulated: d.simulated });
-    if (d.expanded) drawTrend(d.detail.querySelector('.history-chart'), d.history, {
-      now, simulated: d.simulated, detailed: true,
+    drawTrend(d.node.querySelector('.mini-hr'), d.history, { now, simulated: d.simulated });
+    drawTrend(d.node.querySelector('.mini-rr'), d.rrHistory, { now, simulated: d.simulated, metric: 'rr' });
+    if (d.expanded) drawTrend(d.detail.querySelector('.history-chart'), d.expandedMetric === 'rr' ? d.rrHistory : d.history, {
+      now, simulated: d.simulated, detailed: true, metric: d.expandedMetric,
       windowMs: Number(d.detail.querySelector('.graph-range').value)
     });
+  }
+  function respirationText(d, live) {
+    if (!live) return 'Experimental respiration estimate unavailable while the monitor is offline.';
+    const result = d.respiratoryEstimate;
+    if (result?.status === 'ok') return 'Estimated respiration: ' + result.rate + ' breaths/min · experimental RR-based estimate, not a direct breathing measurement.';
+    if (result?.status === 'no_contact') return 'Respiration estimate unavailable: no skin contact.';
+    if (result?.status === 'no_rr') return 'Respiration estimate unavailable: the monitor has not supplied RR intervals.';
+    if (!result || ['warming_up', 'gap_reset', 'label_changed', 'timing_gap', 'paused'].includes(result.status)) return 'Experimental respiration estimate: collecting approximately two minutes of continuous RR history.';
+    return 'Respiration estimate withheld: RR data do not meet the experimental signal-quality checks.';
   }
   function render() {
     if (destroyed) return;
@@ -208,8 +229,15 @@ export async function startDashboard(root) {
       if (display.live && d.last.contact !== false) live.push(d.last.bpm);
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);
       d.detail.hidden = !d.expanded || d.node.hidden;
-      d.node.querySelector('.trend-toggle').setAttribute('aria-label', (d.expanded ? 'Collapse' : 'Expand') + ' heart rate history for ' + (d.label || d.name));
-      d.detail.querySelector('.graph-title').textContent = (d.label || d.name) + ' · Heart rate history';
+      for (const toggle of d.node.querySelectorAll('.trend-toggle')) {
+        const active = d.expanded && d.expandedMetric === toggle.dataset.metric;
+        toggle.setAttribute('aria-expanded', String(active));
+        toggle.setAttribute('aria-label', (active ? 'Collapse' : 'Expand') + (toggle.dataset.metric === 'rr' ? ' RR interval' : ' heart rate') + ' history for ' + (d.label || d.name));
+      }
+      const metricName = d.expandedMetric === 'rr' ? 'RR interval' : 'Heart rate';
+      d.detail.querySelector('.graph-title').textContent = (d.label || d.name) + ' · ' + metricName + ' history';
+      d.detail.querySelector('.history-chart').setAttribute('aria-label', metricName + ' history with time and ' + (d.expandedMetric === 'rr' ? 'milliseconds' : 'beats per minute') + ' axes');
+      d.detail.querySelector('.respiration-note').textContent = respirationText(d, display.live);
       const status = d.node.querySelector('.device-status');
       if (status.textContent !== display.text) status.textContent = display.text;
       status.className = 'device-status' + (display.offline ? ' offline' : !display.live ? ' stale' : '');
@@ -219,7 +247,6 @@ export async function startDashboard(root) {
       d.node.querySelector('.reading strong').textContent = display.live ? d.last.bpm : '—';
       d.node.querySelector('.contact').textContent = display.live && d.last.contact === false ? 'No skin contact' : '';
       d.node.querySelector('.last-seen').textContent = d.last ? `${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
-      d.node.querySelector('.rr').textContent = display.live && d.last.rrMs.length ? `RR ${d.last.rrMs.map(n => Math.round(n)).join(' / ')} ms` : 'RR interval unavailable';
       const action = d.node.querySelector('.device-action');
       action.textContent = d.manager?.enabled || d.simulated && d.status === 'connected' ? 'Pause monitor' : 'Reconnect';
       action.disabled = busy || !capture.enabled;
@@ -264,7 +291,7 @@ export async function startDashboard(root) {
     if (pausing) return pausing;
     if (capture.recording) event('recording_stopped', 'Capture paused; saving remaining data.');
     const saving = capture.pause();
-    const stops = [...devices.values()].map(d => { if (d.manager) return d.manager.stop(); d.status = 'paused'; });
+    const stops = [...devices.values()].map(d => { if (d.manager) return d.manager.stop(); d.status = 'paused'; d.respiration.reset('paused'); d.respiratoryEstimate = d.respiration.result; });
     pausing = (async () => {
       await Promise.all([saving, ...stops]);
       sessionStartedEvent = false;
@@ -321,8 +348,18 @@ export async function startDashboard(root) {
         let i = 0;
         for (const d of devices.values()) {
           if (d.status !== 'connected') { i++; continue; }
-          const bpm = Math.round(66 + i * 2 + Math.sin(performance.now() / 10000 + i) * 8 + Math.random() * 3);
-          const rr = [Math.round(60 / bpm * 1024)]; receive(d, { bpm, contact: true, energy: null, rr, rrMs: rr.map(n => n * 1000 / 1024) }); i++;
+          const now = performance.now();
+          if (d.demoNextBeat == null || now - d.demoNextBeat > 5000) {
+            d.demoNextBeat = now; d.demoRR = Math.round(60 / (66 + i*2) * 1024);
+          }
+          const rr = [];
+          while (d.demoNextBeat <= now && rr.length < 20) {
+            rr.push(d.demoRR);
+            const hr = 66 + i*2 + 3*Math.sin(2*Math.PI*(0.18+i*0.005)*d.demoNextBeat/1000);
+            d.demoRR = Math.round(60/hr*1024); d.demoNextBeat += d.demoRR*1000/1024;
+          }
+          const bpm = Math.round(60*1024/d.demoRR);
+          receive(d, { bpm, contact: true, energy: null, rr, rrMs: rr.map(n => n * 1000 / 1024) }); i++;
         }
         render();
       };

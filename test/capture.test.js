@@ -121,3 +121,24 @@ test('silent-link recovery keeps the recording session, participant label, and C
   assert.equal(s.text('session-1/measurements.csv').trim().split('\r\n').length, 3);
   assert.equal(s.records.filter(r => r.value.type === 'session').length, 1);
 });
+
+test('CSV preserves reported contact states, raw RR and separately identified experimental estimates', async () => {
+  const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume(); await s.capture.prepare();
+  const participant = { ...device, respiratoryEstimate: { rate: 12.4, status: 'ok', quality: 0.83, windowS: 119.2, computedAt: 1000 } };
+  s.capture.measurement(participant, { ...sample, contact: true }, { monotonic: 2000 });
+  participant.respiratoryEstimate = { rate: null, status: 'no_contact', quality: null, windowS: 0, computedAt: null };
+  s.capture.measurement(participant, { ...sample, contact: false });
+  participant.respiratoryEstimate = null;
+  s.capture.measurement(participant, { ...sample, contact: null });
+  await s.capture.pause();
+  const rows = s.records.filter(r => r.value.type === 'measurement').map(r => r.value.row);
+  assert.deepEqual(rows.map(row => row.contact_detected), [true, false, null]);
+  assert.equal(rows[0].respiratory_rate_est_bpm, 12.4); assert.equal(rows[0].respiratory_rate_age_s, 1);
+  assert.equal(rows[0].respiratory_rate_fit, 0.83); assert.equal(rows[0].rr_ms, '1000');
+  assert.equal(rows[1].respiratory_rate_est_bpm, null); assert.equal(rows[1].respiratory_rate_status, 'no_contact');
+  assert.equal(rows[2].respiratory_rate_est_bpm, null); assert.equal(rows[2].respiratory_rate_status, 'unavailable');
+  const lines = s.text('session-1/measurements.csv').trim().split('\r\n');
+  const headers = lines[0].split(','), contact = headers.indexOf('contact_detected'), estimate = headers.indexOf('respiratory_rate_est_bpm');
+  assert.deepEqual(lines.slice(1).map(line => line.split(',')[contact]), ['true', 'false', '']);
+  assert.deepEqual(lines.slice(1).map(line => line.split(',')[estimate]), ['12.4', '', '']);
+});

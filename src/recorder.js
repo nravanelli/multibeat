@@ -1,4 +1,4 @@
-export const COLUMNS = ['session_id','sequence','received_utc','elapsed_ms','device_id','device_name','label','simulated','heart_rate_bpm','contact_detected','energy_expended_kj','rr_ticks_1024','rr_ms'];
+export const COLUMNS = ['session_id','sequence','received_utc','elapsed_ms','device_id','device_name','label','simulated','heart_rate_bpm','contact_detected','energy_expended_kj','rr_ticks_1024','rr_ms','respiratory_rate_est_bpm','respiratory_rate_status','respiratory_rate_fit','respiratory_rate_window_s','respiratory_rate_age_s'];
 export function csvCell(value) {
   let s = value == null ? '' : String(value);
   // Prevent spreadsheet formula execution in user-provided labels and device names.

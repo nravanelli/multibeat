@@ -20,6 +20,7 @@ Build Beatstream, a generic browser-only heart-rate acquisition dashboard for Po
 | `hr-monitor.js` | Public mount API, shadow root, relative asset loading, teardown wrapper |
 | `src/app.js` | Dashboard interaction, paired-device restoration, timers, labels, demo, recovery export |
 | `src/capture.js` | Required output folder, automatic session setup, measurement sequence, pause/resume |
+| `src/respiration.js` | Experimental RR-derived respiration, spectral quality gates, bounded RR analysis |
 | `src/trends.js` | Bounded 30-minute display history and compact/expanded canvas graphs |
 | `src/device-state.js` | Row freshness/offline status and first-reading timeout |
 | `src/view.js` | Static dashboard markup, including control IDs and the device template |
@@ -64,7 +65,8 @@ Read only the files relevant to the change. Check `git status --short --branch` 
 - An output folder is required before pairing/connecting for capture. Automatically prepare a recording when the first monitor connects, before enabling notifications, so its first sample is captured. Do not add a separate manual start step or a browser-only recording mode. Keep a session open across temporary device dropouts; explicit pause stops capture and reconnection.
 - Preserve the IndexedDB journal and folder recording paths. Make storage failures visible and distinguish folder failure from recovery-journal failure.
 - Keep write operations ordered. Do not remove pending data or advance acknowledged file byte offsets until the corresponding measurement and event writes both close successfully. A failed or ambiguous close must be retried at the same byte offsets without duplicating rows. Use UTF-8 byte lengths, not JavaScript string lengths.
-- The current version-2 folder format is `session.json`, one `measurements.csv` for all devices in the session, and one `events.jsonl`. Append and close periodically; do not create new files per notification or flush. Keep a single CSV header. Existing version-1 numbered files remain readable. The CSV schema is exported by `COLUMNS` in `src/recorder.js`.
+- The current version-3 folder format is `session.json`, one `measurements.csv` for all devices in the session, and one `events.jsonl`. Append and close periodically; do not create new files per notification or flush. Keep a single CSV header. Version 3 appends experimental respiratory-rate estimate/status/fit/window/age columns; version 2 lacks those fields. Existing versions remain readable. The CSV schema is exported by `COLUMNS` in `src/recorder.js`.
+- Keep reported RR and contact flags unchanged in recordings. Respiratory rate is an experimental derived value: preserve its method/version, quality-rejection status and configuration, withhold values on contact loss or poor/insufficient data, and reset analysis after reconnects or label changes. Synthetic tests do not validate physiological accuracy. RR graph units are milliseconds; do not confuse RR intervals with breaths/min.
 - Preserve session/device identity, measurement sequence, receipt timestamps, labels at receipt, simulation markers, and reported optional values. Record label and connection changes as events.
 - Treat schema changes as compatibility changes: update metadata/versioning as needed, serialization, recovery behavior, tests, and README together. Keep existing saved sessions readable where practical.
 - Preserve CSV quoting and spreadsheet formula escaping. JSONL recovery should retain original strings.

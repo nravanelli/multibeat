@@ -52,12 +52,16 @@ export class CaptureSession {
   }
   measurement(device, sample, { utc = new Date().toISOString(), monotonic = this.now() } = {}) {
     if (!this.recording || !this.enabled) return false;
+    const respiration = sample.contact === false ? { rate: null, status: 'no_contact' } : device.respiratoryEstimate;
     this.recorder.enqueue({ type: 'measurement', row: {
       session_id: this.recorder.id, sequence: ++this.sequence, received_utc: utc,
       elapsed_ms: +(monotonic - this.started).toFixed(3), device_id: device.id,
       device_name: device.name, label: device.label, simulated: device.simulated,
       heart_rate_bpm: sample.bpm, contact_detected: sample.contact,
-      energy_expended_kj: sample.energy, rr_ticks_1024: sample.rr.join(';'), rr_ms: sample.rrMs.join(';')
+      energy_expended_kj: sample.energy, rr_ticks_1024: sample.rr.join(';'), rr_ms: sample.rrMs.join(';'),
+      respiratory_rate_est_bpm: respiration?.rate ?? null, respiratory_rate_status: respiration?.status ?? 'unavailable',
+      respiratory_rate_fit: respiration?.quality ?? null, respiratory_rate_window_s: respiration?.windowS ? +respiration.windowS.toFixed(1) : null,
+      respiratory_rate_age_s: respiration?.rate != null && respiration.computedAt != null ? +((monotonic - respiration.computedAt) / 1000).toFixed(3) : null
     } });
     return true;
   }

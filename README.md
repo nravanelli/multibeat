@@ -55,9 +55,9 @@ Keep the page open and the computer awake. The app requests a screen wake lock w
 
 ## Monitor table and expanded graphs
 
-Each monitor has a row showing its device name/ID, editable participant label, status, current heart rate and available RR intervals, a rolling 60-second trend, last-reading time, and pause/reconnect control. Offline rows stay visible. On small screens, scroll the table horizontally.
+Each monitor has a row showing its device name/ID, editable participant label, status, current heart rate, separate rolling 60-second heart-rate and RR-interval trends, last-reading time, and pause/reconnect control. Offline rows stay visible. On small screens, scroll the table horizontally.
 
-Click the mini trend (or focus it and press Enter/Space) to expand a larger graph directly below that row. Choose **Last minute**, **Last 5 minutes**, or **Last 30 minutes**. The graph updates live with time and bpm axes, preserves visible gaps longer than five seconds, and shows only history collected since the page was opened. Close it with **Close graph** or the mini trend again. Filtering hides both the device row and its expanded graph together. Display downsampling does not change recording frequency or values in the CSV files.
+Click either mini trend (or focus it and press Enter/Space) to expand a larger graph directly below that row. Use **Metric** to switch between heart rate (bpm) and RR intervals (milliseconds). Raw RR numbers are retained in the CSV instead of being listed below the heart-rate value. Choose **Last minute**, **Last 5 minutes**, or **Last 30 minutes**. The graph updates live with time and the selected metric’s units on its axes, preserves visible gaps longer than five seconds, and shows only history collected since the page was opened. Close it with **Close graph** or the mini trend again. Filtering hides both the device row and its expanded graph together. Heart-rate display downsampling does not change recording frequency or values in the CSV files. The RR graph retains individual reported intervals (up to 8,000 points over the last 30 minutes). Its relative beat times are reconstructed by accumulating intervals, with the first batch anchored to browser receipt; these are approximate plotting times, not synchronized device timestamps. Contact-loss intervals are preserved in raw CSV data but excluded from the RR display and respiration analysis.
 
 ## Automatic reconnection
 
@@ -89,7 +89,7 @@ selected-folder/
 
 All devices append to **one `measurements.csv` per recording session**, identified by `device_id` and participant `label`. The header is written once. Data is saved about every five seconds, processing up to 500 queued records per batch; a batch is an internal write unit, not a separate file. Pause drains remaining batches. Reconnecting devices continue the same CSV while that session remains open. Explicitly pausing and resuming capture starts a new session folder and CSV.
 
-Connection and label events append to one `events.jsonl`; `session.json` identifies format version 2 and the output filenames. Earlier version-1 recordings used numbered CSV/event chunks; existing files and browser recovery remain readable and are not rewritten.
+Connection and label events append to one `events.jsonl`; `session.json` identifies format version 3, the respiration algorithm configuration, and the output filenames. Version 2 used the same single-file layout without the respiratory-estimate columns; version 1 used numbered CSV/event chunks. Existing files and browser recovery remain readable and are not rewritten.
 
 Each append reopens the existing file, seeks to the last acknowledged byte offset, writes the new rows, and closes the file to commit them. Retries overwrite only the unacknowledged tail at that same byte offset, so partial batch failures cannot duplicate rows. Files are not kept as one uncommitted stream until capture ends. Do not edit or replace a recording file while capture is active. Because the browser may copy existing content into a temporary file for each append, saving can become slower as a recording grows; validate long sessions on the target storage.
 
@@ -106,12 +106,42 @@ Every measurement is also queued to an IndexedDB journal before folder saving. D
 | `label` | Participant code at receipt time |
 | `simulated` | `true` for generated demo data |
 | `heart_rate_bpm` | Reported heart rate |
-| `contact_detected` | `true` / `false` when supported; empty otherwise |
+| `contact_detected` | `false` when the device reports no skin contact, `true` for contact, empty when unsupported |
 | `energy_expended_kj` | Reported cumulative energy value; empty if absent |
 | `rr_ticks_1024` | Ordered RR values, semicolon-separated, in 1/1024 seconds |
 | `rr_ms` | Same RR intervals converted to milliseconds |
+| `respiratory_rate_est_bpm` | Experimental RR-derived breathing estimate, in breaths/min; empty when withheld |
+| `respiratory_rate_status` | `ok` or a reason the estimate is unavailable (see below) |
+| `respiratory_rate_fit` | Peak sinusoid’s explained-variance fraction (0–1); not a probability or clinical confidence score |
+| `respiratory_rate_window_s` | Actual RR time span used/collected for the latest analysis, in seconds |
+| `respiratory_rate_age_s` | Age of a valid cached estimate at this row’s receipt time; empty if no valid estimate |
 
 CSV text is quoted when necessary and spreadsheet formula prefixes are escaped with an apostrophe. JSONL recovery preserves the original strings.
+
+## Skin contact and experimental respiratory-rate estimation
+
+Contact is recorded exactly as reported by the standard BLE flags: `contact_detected=false` indicates no skin contact, `true` indicates contact, and an empty field means contact detection is unsupported. If the strap stops sending entirely, there are no invented measurement rows to mark; dropout/recovery events identify the interruption.
+
+Respiratory sinus arrhythmia (RSA) can produce breathing-related modulation in RR intervals. Beatstream includes an original dependency-free JavaScript implementation of the **published generalized Lomb–Scargle least-squares method**, searching for this modulation. It does not import SciPy, NeuroKit, or the RRest toolbox, and is not a validated port of those projects. The entire implementation and configuration are in `src/respiration.js`; the constants are also saved in session metadata as `rsa-gls-v1`.
+
+The current engineering defaults are:
+
+- A rolling 120-second RR window (approximately two minutes before a result) with at least 60 intervals; recalculation no more often than every five seconds. Estimates between updates are cached and explicitly aged in the CSV.
+- Individual relative beat times reconstructed by accumulating every reported RR interval, including multiple intervals per BLE notification. No interpolated heartbeat data or estimated RR from heart-rate bpm is used.
+- A search band of 6–30 breaths/min, conservatively reduced for slow beat sampling. This guard is a heuristic, not a general Nyquist theorem for irregular data; out-of-band breathing may be missed or aliased.
+- Analysis rejects intervals outside 250–2,500 ms, removes intervals more than 20% from the window median, and withholds estimates if over 10% are outliers. The raw RR values remain unchanged in the CSV.
+- Linear detrending, followed by floating-mean sine/cosine least-squares fits over the frequency grid. A minimum 3 ms residual standard deviation, 0.35 explained-variance fraction, and 1.5 peak-to-competing-peak ratio are required. Peaks near a search-band edge are withheld.
+- Contact loss, a receipt gap over five seconds, a large RR/receipt timing discrepancy, reconnection, explicit pause, or applying a new participant label clears the analysis history. The new history must warm up again.
+
+`respiratory_rate_status` is `ok` only when a rate is supplied. Other states include `warming_up`, `no_rr`, `no_contact`, `gap_reset`, `timing_gap`, `label_changed`, `paused`, `invalid_rr`, `rr_artifacts`, `weak_rr_variation`, `weak_periodicity`, `ambiguous_peak`, `band_edge`, and `sampling_limited`. `unavailable` is a serialization fallback for data with no estimator result. None means zero breaths/min or absence of breathing.
+
+**This is an experimental periodicity-based estimate, not a measured respiratory signal.** The threshold choices have been tested with synthetic signals only. Spectral fit quality cannot establish that a periodic component is respiratory. Movement, ectopic beats/arrhythmia, weak RSA, changing heart rate, and breathing outside the search band can produce missing or incorrect estimates even when a result passes these checks. Validate against a respiratory belt, airflow, or another appropriate breathing reference in the intended population and activity before treating this as research-quality respiratory-rate data. Raw RR, contact flags, estimator status, and configuration are retained for that assessment.
+
+Method references:
+
+- Schäfer & Kratky (2008), [Estimation of breathing rate from respiratory sinus arrhythmia: comparison of various methods](https://pubmed.ncbi.nlm.nih.gov/18188703/).
+- Zechmeister & Kürster (2009), [The generalised Lomb–Scargle periodogram](https://doi.org/10.1051/0004-6361:200811296); [SciPy’s mathematical description](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lombscargle.html).
+- [RRest respiratory-rate algorithm resources](https://rrest.readthedocs.io/en/latest/) for broader methods and evaluation; they are not runtime dependencies.
 
 ## Timestamp interpretation
 
@@ -121,7 +151,7 @@ This implementation captures standard heart rate and available RR intervals. Pol
 
 ## Recovery and long sessions
 
-IndexedDB stores session metadata, original measurement rows, and connection/label/visibility events. It is local to the browser profile and origin (including port). Closing the tab does not delete saved records, but clearing site data, private browsing, or browser eviction may do so. Recovery exports should not substitute for checked folder files in long collections. To preserve recordings saved by earlier versions, Beatstream retains the internal IndexedDB name `cooling-hubs-hr`; this is a storage compatibility identifier, not the application name. The legacy `pulsedeck-paired` setting is also retained so remembered monitors remain available on the same origin. Recovery export reads the selected session into memory; very large exports may exceed browser memory. Display history is bounded to 30 minutes with at most one point per second (up to 1,801 points per device); every notification is still recorded. The activity list is limited to 80 entries. Folder-write backlogs remain in memory until retried; resolve disk errors promptly. Old recovery records are retained until site data is cleared; export needed recordings before clearing it.
+IndexedDB stores session metadata, original measurement rows, and connection/label/visibility events. It is local to the browser profile and origin (including port). Closing the tab does not delete saved records, but clearing site data, private browsing, or browser eviction may do so. Recovery exports should not substitute for checked folder files in long collections. To preserve recordings saved by earlier versions, Beatstream retains the internal IndexedDB name `cooling-hubs-hr`; this is a storage compatibility identifier, not the application name. The legacy `pulsedeck-paired` setting is also retained so remembered monitors remain available on the same origin. Recovery export reads the selected session into memory; very large exports may exceed browser memory. Heart-rate display history is bounded to 30 minutes with at most one point per second (up to 1,801 points per device); RR display history is bounded to 30 minutes/8,000 points and respiration analysis to 120 seconds/512 intervals. Every notification is still recorded. The activity list is limited to 80 entries. Folder-write backlogs remain in memory until retried; resolve disk errors promptly. Old recovery records are retained until site data is cleared; export needed recordings before clearing it.
 
 ## Repository
 
@@ -131,7 +161,7 @@ Source layout: `hr-monitor.js` is the website import entry point; `src/view.js` 
 
 ## Verification limits
 
-Automated tests cover packet formats and malformed packets, subscription cleanup, CSV escaping, journaling order, append ordering and failure/retry without duplicate rows, UTF-8 byte offsets, browser storage failure, required-folder gating, concurrent automatic setup, first-sample capture, pause/resume, retry backoff, silent-link recovery and cancellation, and a 48-device/2,880-measurement recorder workload. These do not establish physical device compatibility or simultaneous Bluetooth capacity. Real straps, browser permission prompts, IndexedDB durability, and folder API integration require testing on the collection computer.
+Automated tests cover packet formats and malformed packets, subscription cleanup, CSV escaping, journaling order, append ordering and failure/retry without duplicate rows, UTF-8 byte offsets, contact-state serialization, synthetic RSA recovery and quality rejection, RR graph bounds/units, browser storage failure, required-folder gating, concurrent automatic setup, first-sample capture, pause/resume, retry backoff, silent-link recovery and cancellation, and a 48-device/2,880-measurement recorder workload. These do not establish physical device compatibility or simultaneous Bluetooth capacity. Real straps, browser permission prompts, IndexedDB durability, and folder API integration require testing on the collection computer.
 
 ## Protocol and browser references
 
