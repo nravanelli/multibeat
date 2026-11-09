@@ -1,15 +1,19 @@
-# Beatstream · Browser heart-rate capture
+# MultiBeat
 
-A dependency-free JavaScript web application for receiving standard Bluetooth LE heart-rate notifications from multiple monitors, showing a live dashboard, and recording to a user-selected local folder. Acquisition, processing, storage, and recovery run in the browser. No account, backend, cloud upload, analytics, CDN, or build step.
+**Capturing heart rate from multiple devices, locally.**
 
-## Import into an existing website
+MultiBeat is a browser-only dashboard for collecting heart-rate data from multiple Bluetooth LE monitors, including compatible Powr Labs straps and Polar H10 devices. Connect monitors, assign participant labels, view live heart rate and RR intervals, and record to a folder on your computer.
 
-No local server, Node.js, npm, framework, or build tools are needed to use the app on your website. Upload `hr-monitor.js`, `styles.css`, and the `src/` directory together, preserving their relative paths. On your HTTPS page, add:
+Plain JavaScript, HTML, and CSS. **No npm, package installation, build step, application backend, account, or data uploads.** Graphs use a locally bundled copy of [uPlot](https://github.com/leeoniya/uPlot), with no CDN requests. Connect as many monitors as your browser and Bluetooth hardware support; MultiBeat imposes no connection cap.
+
+## Embed in an existing website
+
+Upload `hr-monitor.js`, `styles.css`, and the complete `src/` and `vendor/` directories together. Preserve their relative paths and load them from an HTTPS website:
 
 ```html
 <div id="heart-rate-monitor"></div>
 <script type="module">
-  import { mountHeartRateMonitor } from '/beatstream/hr-monitor.js';
+  import { mountHeartRateMonitor } from '/multiBeat/hr-monitor.js';
 
   const monitor = await mountHeartRateMonitor(
     document.getElementById('heart-rate-monitor')
@@ -17,158 +21,206 @@ No local server, Node.js, npm, framework, or build tools are needed to use the a
 </script>
 ```
 
-Replace `/beatstream/` with the uploaded directory. The entry module loads its own dashboard markup and stylesheet; you do not need to copy the dashboard HTML into your page. The dashboard uses a shadow root to isolate its IDs and styles from the rest of your site. Mount one dashboard per page. For a single-page application, call `await monitor.destroy()` before removing its container; this stops capture, flushes pending writes, releases connections, and removes timers and page listeners.
+Replace `/multiBeat/` with your uploaded directory. The mount API loads the dashboard and stylesheet into a shadow root, keeping its styles and IDs separate from the host page. Mount one dashboard per page. Before removing it, call:
 
-Your website serves ordinary static assets. All Bluetooth acquisition and file writing happen in the visitor's browser, to a folder that visitor selects on their computer. There is no application backend or data upload. Configure your hosting to serve `.js` as `text/javascript` (or another valid JavaScript MIME type). Use desktop Chrome or Edge with the required browser APIs available. The page's Content Security Policy must permit these modules and the stylesheet; use an external entry script if inline modules are disallowed. The site's Permissions Policy must permit Bluetooth on its own origin, and should not disable folder pickers. Load in the main page rather than an iframe.
-
-Bluetooth and folder access require a secure context and user permission. An existing HTTPS website supplies that context; `file://` is not a supported launch method for this module application. Importing the module renders the controls but does not bypass the connection or folder permission dialogs.
-
-## Use as a standalone website
-
-Upload `index.html`, `hr-monitor.js`, `styles.css`, and `src/` to any HTTPS static website, preserving the directory layout. Open that page directly in desktop Chrome or Edge. Files such as `server.js`, `scripts/`, `test/`, and Git metadata do not need to be uploaded.
-
-## Optional local development
-
-Only if you want to preview the app locally without using your website, Node.js 22.7+ can serve these static files:
-
-```sh
-node server.js
+```js
+await monitor.destroy();
 ```
 
-Then open **http://localhost:5173**. This optional development helper does not participate in Bluetooth acquisition or receive recordings. It is not required on the website or on users' computers.
+Teardown stops capture, saves pending data where possible, releases connections and wake locks, and removes timers and listeners. Surface any rejected teardown promise so a storage failure is not mistaken for a successful save.
 
-Maintainers can run automated tests with `node --test`. No npm, package manager, dependency installation, or build step is required. All JavaScript files use `.js`. The optional development commands use Node.js 22.7+ to recognize ES module syntax without a package manifest. Browser imports use native modules and need no Node flags.
+The host must serve `.js` files with a JavaScript MIME type and allow the modules and stylesheet through its Content Security Policy. If inline scripts are prohibited, put the import in a separate `.js` module. Use a top-level page; its Permissions Policy must allow Bluetooth and folder access.
 
-## Collect data
+For a standalone website, also upload `index.html` and open that page. Node.js and `server.js` are not needed on the host or on visitors' computers.
 
-1. Choose an output folder and grant read/write permission. A folder is mandatory for both physical monitors and the demo; there is no browser-only recording mode. Folder selection, Connect monitor, and Pause/Resume capture are grouped at the top. There is no session label to enter.
-2. Wear/activate each strap and disconnect competing apps if needed. Click **Connect monitor** and select a device in the Bluetooth chooser. Repeat for additional devices. There is no application-imposed connection limit or fixed target count.
-3. Capture starts automatically when the first monitor establishes its heart-rate service connection. Beatstream prepares the session files before enabling notifications, so the first readings are included. Later monitors join the same session. There is no separate Start recording step.
-4. Type a participant label in the table’s **Participant label** column, then click the adjacent **Update label** button to apply it. Typing, pressing Enter in the input, or leaving the field does not change the applied label. An unapplied draft is marked and the currently applied value remains visible below it. Each measurement CSV row contains that label in its `label` column. Applying a new label affects subsequent measurements, not existing rows or filenames. Labels are remembered in this browser profile. Measurements carry the label in effect at receipt; changes are logged as events. Prefer participant codes to personal names.
-5. If a monitor goes out of range, Beatstream keeps the recording session open and retries the connection automatically. Readings resume in the same session when the connection succeeds. No missing measurements are fabricated or backfilled.
-6. Use **Pause monitor** to stop one monitor and its retries. Use **Reconnect** in that row to enable it again. **Pause capture** disconnects all monitors, cancels retries, and drains remaining writes. **Resume capture** enables automatic connections again; the next successful connection begins a new session. Monitors individually paused stay paused until explicitly reconnected.
-7. Open **Activity & recovery** below the monitor table for capture events and browser backup export. Check folder errors before closing the page. **Retry folder writes** retries retained batches. Pending failed writes must be saved before a new session can start. **Export recovery** downloads the selected session as JSONL, including metadata, measurements, and events.
+## What you need
 
-Keep the page open and the computer awake. The app requests a screen wake lock when supported, but cannot guarantee operation during sleep, background throttling, or a closed tab. Folder writes are batched every five seconds; recovery is also journaled in this browser.
+- Desktop Chrome or Edge with Web Bluetooth, direct folder access, and IndexedDB available.
+- An HTTPS website, or `http://localhost` for local testing. Double-clicking `index.html` through `file://` is not supported.
+- Monitors exposing the standard **Heart Rate Service** (`0x180D`) and **Heart Rate Measurement** characteristic (`0x2A37`). A brand name alone does not establish protocol compatibility.
+- Permission to use each monitor and write to a local output folder.
 
-**Try demo** creates twelve labelled simulated monitors, using the same folder requirement and automatic capture path. Twelve is only the example dataset size, not a physical-device limit. All generated measurements have `simulated=true`, and session metadata identifies simulation mode. Use a fresh page without restored monitors for the isolated demo, and end it before connecting real devices.
+Standard heart-rate notifications are supported. Polar-specific ECG/accelerometer streaming and ANT+ are outside the current scope. RR intervals, skin-contact detection, and energy expenditure are recorded only when reported by the monitor; missing RR values are never calculated from heart rate. There is no respiratory-rate estimation.
 
-## Monitor table and expanded graphs
+## Record data
 
-Each monitor has a row showing its device name/ID, editable participant label, status, current heart rate, separate rolling 60-second heart-rate and RR-interval trends, last-reading time, and pause/reconnect control. Offline rows stay visible. On small screens, scroll the table horizontally.
+1. Select **Choose folder** and grant read/write access. An output folder is required before pairing or capture.
+2. Wear or activate the strap, then click **Pair HRM** and select it. Repeat for additional monitors.
+3. Recording starts automatically when the first monitor connects. Session files are prepared before notifications are enabled so the first sample can be captured. Later monitors join that session.
+4. Enter a participant code and click **Update**. Edits remain drafts until you activate the button. Committed changes apply to future CSV rows; earlier rows and filenames remain unchanged. The applied label is shown below the field.
+5. Click a heart-rate or RR trend to expand the device's graph. Choose the metric and a window of 1, 5, 30, or **60 minutes**. Mini graphs show the latest 60 seconds. Visible graphs always follow incoming data. Hover to inspect values or use the ＋/− buttons to change the live lookback duration; the right edge stays at now even when zoomed. **Reset zoom** restores the selected time window. With the chart focused, use +/− to zoom and Home to reset. There is no frozen or historical pan mode. History is collected while this page is open; it is not loaded from old recordings.
+6. Use a row's **Pause / Resume** control for one monitor. **Pause capture** stops all connections and retries and saves queued data. **Resume capture** starts a new session when the next monitor connects. Individually paused monitors remain paused.
+7. Before closing or refreshing, pause capture and resolve any visible storage errors. **Retry folder writes** retries retained data after a folder failure.
 
-Click either mini trend (or focus it and press Enter/Space) to expand a larger graph directly below that row. Use **Metric** to switch between heart rate (bpm) and RR intervals (milliseconds). Raw RR numbers are retained in the CSV instead of being listed below the heart-rate value. Choose **Last minute**, **Last 5 minutes**, or **Last 30 minutes**. The graph updates live with time and the selected metric’s units on its axes, preserves visible gaps longer than five seconds, and shows only history collected since the page was opened. Close it with **Close graph** or the mini trend again. Filtering hides both the device row and its expanded graph together. Heart-rate display downsampling does not change recording frequency or values in the CSV files. The RR graph retains individual reported intervals (up to 8,000 points over the last 30 minutes). Its relative beat times are reconstructed by accumulating intervals, with the first batch anchored to browser receipt; these are approximate plotting times, not synchronized device timestamps. Contact-loss intervals are preserved in raw CSV data but excluded from the RR display and respiration analysis.
+The header contains the pairing and folder controls, Keep awake switch, connected/device counts, and recording timer. The filter sits above the table. Offline devices stay in the table with their participant labels and an explanation; old readings are not displayed as live data.
 
-## Automatic reconnection
+The heart beside MultiBeat pulses only while capture is enabled and at least one monitor has fresh readings. Reduced-motion preferences disable the animation. This indicates acquisition, not confirmation that every pending disk write has completed.
 
-While capture is enabled and the page is open, disconnected or out-of-range monitors retry indefinitely with delays of 1, 2, 4, 8, 16, then at most 30 seconds between completed failed attempts. Each successful return creates a fresh notification subscription. If Bluetooth remains connected but valid heart-rate readings stop for 15 seconds (including a new connection that never sends its first reading), a no-data watchdog closes the stalled link and enters the same automatic retry loop. Fresh valid readings reset the watchdog. Invalid packets do not keep a stalled stream alive. The recording session, participant label, and CSV sequence continue across recovery; this does not fabricate or backfill missing readings. Only one connection attempt runs per monitor at a time. Explicitly pausing a monitor, pausing capture, or destroying the dashboard cancels its retries. Permission/security errors require restoring browser access and using **Reconnect**; an unsupported service may require choosing a compatible monitor.
+The selected folder name stays visible. Clicking it opens the native folder dialog with that folder as the suggested starting location. Browsing or selecting another folder in this dialog does not change the recording destination. Browsers cannot directly launch Finder/Explorer or expose the folder's absolute path. Pause and use **Change folder** to change the destination.
 
-Beatstream remembers the IDs of monitors selected through its Bluetooth chooser. On a later visit, where `navigator.bluetooth.getDevices()` is available, it restores only those remembered devices still authorized for the same origin. Choose an output folder again to enable their connections and automatic capture; folder permission is not assumed across reloads. If this API is unavailable, or site/device permissions have been cleared, use **Connect monitor** again. Operating-system pairing alone does not authorize a website.
+### Keep awake
 
-Reconnection is a best effort within browser Bluetooth capabilities. Radio availability, existing links to other apps, revoked permissions, background suspension, device firmware, and system sleep can prevent or delay it. Nothing runs after the page is closed. Beatstream does not continuously scan arbitrary unpaired devices, bypass permission prompts, or promise an exact range-detection time.
+The larger **Keep awake** switch is enabled by default. During visible capture, it requests a screen wake lock:
 
-## Device compatibility and capacity
+| Status | Meaning |
+| --- | --- |
+| Active | The browser granted the screen wake lock. |
+| During capture | Enabled; waiting for a recording to start. |
+| Off | Disabled by the user. |
+| Tab hidden | The page is not visible; the lock is released. |
+| Not active | The browser rejected or released the lock; switch off/on to retry. |
+| Unavailable | This browser does not provide the API. |
 
-The app uses the Bluetooth SIG Heart Rate Service (`0x180D`) and Heart Rate Measurement characteristic (`0x2A37`). Powr Labs documents standard Bluetooth Smart heart-rate profiles; Polar H10 also supports Bluetooth heart rate. Powr Labs and Polar are separate products, so a Powr Labs model should not be assumed to offer Polar-specific features. RR intervals, contact detection, and energy values are recorded only when supplied by the monitor. An absent RR interval is not synthesized from heart rate.
+Pause releases the lock. Returning to the visible tab requests it again if capture and the switch remain enabled. It cannot override manual sleep, closing the laptop lid, browser suspension, or the strap's own power management.
 
-The connection count shows the actual number connected, with no target denominator. Connect as many monitors as your actual setup can sustain. Practical capacity depends on the operating system, adapter, drivers, browser, radio environment, and other active connections. Browser code cannot force the adapter to accept more links or select an adapter. Test all intended monitors together for the planned collection duration, checking dropouts, stale signals, reconnection events, and saved files. Simulated load tests establish software behavior, not physical radio capacity.
+## Recording format
 
-Use a top-level desktop Chrome/Edge page with Web Bluetooth, IndexedDB, and the File System Access API available. HTTPS or localhost and user permissions are required. Missing capabilities are reported; browsers without folder writing cannot capture. The chooser filters for devices advertising the standard heart-rate service; proprietary-only devices are outside this implementation.
-
-## Recording files
-
-Each session creates a unique subfolder such as:
+Each session creates a unique subfolder under the selected output folder:
 
 ```text
 selected-folder/
-  beatstream-2026-11-02T03-00-00-000Z-a1b2c3d4/
+  multibeat-2026-11-09T03-00-00-000Z-a1b2c3d4/
     session.json
     measurements.csv
     events.jsonl
 ```
 
-All devices append to **one `measurements.csv` per recording session**, identified by `device_id` and participant `label`. The header is written once. Data is saved about every five seconds, processing up to 500 queued records per batch; a batch is an internal write unit, not a separate file. Pause drains remaining batches. Reconnecting devices continue the same CSV while that session remains open. Explicitly pausing and resuming capture starts a new session folder and CSV.
+- **`session.json`**: application name, session identity, format version, start time, devices known when the session was created, and timestamp basis.
+- **`measurements.csv`**: one shared CSV for all devices in the session, with one header. Use `device_id` to separate device streams and `label` for the participant label at receipt.
+- **`events.jsonl`**: connection, label, and recording events, one JSON object per line. Devices joining later are represented in measurements and connection events.
 
-Connection and label events append to one `events.jsonl`; `session.json` identifies format version 3, the respiration algorithm configuration, and the output filenames. Version 2 used the same single-file layout without the respiratory-estimate columns; version 1 used numbered CSV/event chunks. Existing files and browser recovery remain readable and are not rewritten.
+The current format version is **5**. Existing version 1–4 recordings and browser recovery records remain untouched and readable; earlier files may have different columns, including retired respiratory estimates. Rebranding does not rewrite existing files. New metadata uses `application: "MultiBeat"` and session folders use the `multibeat-` prefix.
 
-Each append reopens the existing file, seeks to the last acknowledged byte offset, writes the new rows, and closes the file to commit them. Retries overwrite only the unacknowledged tail at that same byte offset, so partial batch failures cannot duplicate rows. Files are not kept as one uncommitted stream until capture ends. Do not edit or replace a recording file while capture is active. Because the browser may copy existing content into a temporary file for each append, saving can become slower as a recording grows; validate long sessions on the target storage.
+### Measurement columns
 
-Every measurement is also queued to an IndexedDB journal before folder saving. Data is durable only after the corresponding browser transaction or file close completes, so a crash can still lose the most recently received samples. Failed writes are reported and retained for retry. Browser storage failures are reported separately; folder writing continues when available. Folder handles and session files are never automatically uploaded.
-
-| CSV field | Meaning |
+| Column | Contents |
 | --- | --- |
-| `session_id` | Unique recording session identifier |
-| `sequence` | Global session measurement order, starting at 1 |
-| `received_utc` | Browser wall-clock receipt time, ISO 8601 UTC |
-| `elapsed_ms` | Monotonic time since recording initialization, in milliseconds |
-| `device_id` | Browser-provided opaque device ID, not a Bluetooth MAC address |
-| `device_name` | Advertised device name |
-| `label` | Participant code at receipt time |
-| `simulated` | `true` for generated demo data |
-| `heart_rate_bpm` | Reported heart rate |
-| `contact_detected` | `false` when the device reports no skin contact, `true` for contact, empty when unsupported |
-| `energy_expended_kj` | Reported cumulative energy value; empty if absent |
-| `rr_ticks_1024` | Ordered RR values, semicolon-separated, in 1/1024 seconds |
-| `rr_ms` | Same RR intervals converted to milliseconds |
-| `respiratory_rate_est_bpm` | Experimental RR-derived breathing estimate, in breaths/min; empty when withheld |
-| `respiratory_rate_status` | `ok` or a reason the estimate is unavailable (see below) |
-| `respiratory_rate_fit` | Peak sinusoid’s explained-variance fraction (0–1); not a probability or clinical confidence score |
-| `respiratory_rate_window_s` | Actual RR time span used/collected for the latest analysis, in seconds |
-| `respiratory_rate_age_s` | Age of a valid cached estimate at this row’s receipt time; empty if no valid estimate |
+| `session_id` | Unique recording identity. |
+| `sequence` | Increasing measurement sequence within the session. |
+| `received_utc` | Browser wall-clock receipt time in UTC. |
+| `elapsed_ms` | Monotonic elapsed milliseconds since session start. |
+| `device_id` | Browser-provided device identity. |
+| `device_name` | Device name at receipt. |
+| `label` | Committed participant label at receipt. |
+| `simulated` | Whether the measurement was simulated; retained for tests and legacy data. |
+| `heart_rate_bpm` | Reported heart rate. |
+| `contact_detected` | `true`, `false`, or blank when contact detection is unsupported. |
+| `energy_expended_kj` | Reported energy expenditure, or blank when absent. |
+| `rr_ticks_1024` | Reported RR intervals in 1/1024-second ticks, separated by semicolons. |
+| `rr_ms` | Those RR intervals converted to milliseconds, separated by semicolons. |
 
-CSV text is quoted when necessary and spreadsheet formula prefixes are escaped with an apostrophe. JSONL recovery preserves the original strings.
+The schema is exported as `COLUMNS` in `src/recorder.js`. CSV serialization quotes special characters and escapes leading spreadsheet-formula characters in text. JSONL recovery retains the original strings. Contact flags and reported RR intervals are preserved in recordings even when no skin contact is detected.
 
-## Skin contact and experimental respiratory-rate estimation
+### Timestamps and long recordings
 
-Contact is recorded exactly as reported by the standard BLE flags: `contact_detected=false` indicates no skin contact, `true` indicates contact, and an empty field means contact detection is unsupported. If the strap stops sending entirely, there are no invented measurement rows to mark; dropout/recovery events identify the interruption.
+Standard notifications do not provide synchronized sensor timestamps. `received_utc` is when the browser receives the notification, including transport and scheduling latency. Wall-clock corrections can change it; `elapsed_ms` uses `performance.now()`. Multiple RR intervals in one notification share a receipt timestamp. Do not interpret recordings as precisely synchronized ECG or absolute beat times across devices.
 
-Respiratory sinus arrhythmia (RSA) can produce breathing-related modulation in RR intervals. Beatstream includes an original dependency-free JavaScript implementation of the **published generalized Lomb–Scargle least-squares method**, searching for this modulation. It does not import SciPy, NeuroKit, or the RRest toolbox, and is not a validated port of those projects. The entire implementation and configuration are in `src/respiration.js`; the constants are also saved in session metadata as `rsa-gls-v1`.
+Files are appended and closed about every five seconds, using bounded write batches rather than creating a new file for each batch. Temporary dropouts keep the same session and CSV sequence. Explicitly pausing and resuming capture creates a new session folder. A notification is not durable until the corresponding storage operation completes; an abrupt crash can lose recent data.
 
-The current engineering defaults are:
+Display history is bounded to 60 minutes: at most 3,601 HR points and 24,001 RR points per device. RR graphs use reported intervals on a receipt-anchored relative timeline and leave gaps where readings are absent. Graph filtering and display bounds do not remove recorded measurements. Folder-write failures can leave an in-memory backlog; resolve errors promptly during long collections.
 
-- A rolling 120-second RR window (approximately two minutes before a result) with at least 60 intervals; recalculation no more often than every five seconds. Estimates between updates are cached and explicitly aged in the CSV.
-- Individual relative beat times reconstructed by accumulating every reported RR interval, including multiple intervals per BLE notification. No interpolated heartbeat data or estimated RR from heart-rate bpm is used.
-- A search band of 6–30 breaths/min, conservatively reduced for slow beat sampling. This guard is a heuristic, not a general Nyquist theorem for irregular data; out-of-band breathing may be missed or aliased.
-- Analysis rejects intervals outside 250–2,500 ms, removes intervals more than 20% from the window median, and withholds estimates if over 10% are outliers. The raw RR values remain unchanged in the CSV.
-- Linear detrending, followed by floating-mean sine/cosine least-squares fits over the frequency grid. A minimum 3 ms residual standard deviation, 0.35 explained-variance fraction, and 1.5 peak-to-competing-peak ratio are required. Peaks near a search-band edge are withheld.
-- Contact loss, a receipt gap over five seconds, a large RR/receipt timing discrepancy, reconnection, explicit pause, or applying a new participant label clears the analysis history. The new history must warm up again.
+## Reconnection and browser limits
 
-`respiratory_rate_status` is `ok` only when a rate is supplied. Other states include `warming_up`, `no_rr`, `no_contact`, `gap_reset`, `timing_gap`, `label_changed`, `paused`, `invalid_rr`, `rr_artifacts`, `weak_rr_variation`, `weak_periodicity`, `ambiguous_peak`, `band_edge`, and `sampling_limited`. `unavailable` is a serialization fallback for data with no estimator result. None means zero breaths/min or absence of breathing.
+MultiBeat retries disconnected monitors while capture is enabled and the page is open. Delays increase from 1 to 2, 4, 8, 16, then at most 30 seconds between failed attempts. A link that sends no valid readings for 15 seconds is refreshed even if Chrome has not reported a disconnect. Connection setup has a 60-second GATT timeout and 15-second timeouts for subsequent Bluetooth steps. Application cancellation cannot guarantee that a stuck native operation has ended.
 
-**This is an experimental periodicity-based estimate, not a measured respiratory signal.** The threshold choices have been tested with synthetic signals only. Spectral fit quality cannot establish that a periodic component is respiratory. Movement, ectopic beats/arrhythmia, weak RSA, changing heart rate, and breathing outside the search band can produce missing or incorrect estimates even when a result passes these checks. Validate against a respiratory belt, airflow, or another appropriate breathing reference in the intended population and activity before treating this as research-quality respiratory-rate data. Raw RR, contact flags, estimator status, and configuration are retained for that assessment.
+Already authorized monitors can reconnect through `device.gatt.connect()` without a chooser. Where `navigator.bluetooth.getDevices()` is available, MultiBeat restores only devices previously paired through MultiBeat. Selecting an output folder enables capture; restoration does not bypass that requirement. These APIs do not guarantee that a strap is currently discoverable or connectable.
 
-Method references:
+Where available, `watchAdvertisements()` listens for returning devices and triggers another connection attempt when an advertisement arrives. Some Chrome configurations do not expose this experimental API. You can check availability in the console:
 
-- Schäfer & Kratky (2008), [Estimation of breathing rate from respiratory sinus arrhythmia: comparison of various methods](https://pubmed.ncbi.nlm.nih.gov/18188703/).
-- Zechmeister & Kürster (2009), [The generalised Lomb–Scargle periodogram](https://doi.org/10.1051/0004-6361:200811296); [SciPy’s mathematical description](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lombscargle.html).
-- [RRest respiratory-rate algorithm resources](https://rrest.readthedocs.io/en/latest/) for broader methods and evaluation; they are not runtime dependencies.
+```js
+typeof BluetoothDevice.prototype.watchAdvertisements
+```
 
-## Timestamp interpretation
+`"undefined"` means the advertisement-watching path is unavailable. Normal retries continue. Receiving an advertisement is not a guarantee that GATT connection setup will succeed. See the [Web Bluetooth implementation status](https://github.com/whatwg/bluetooth/blob/main/implementation-status.md) for browser and flag limitations.
 
-The standard heart-rate notification does **not** contain a sensor timestamp. `received_utc` records the time the browser processes a notification, including Bluetooth and scheduling latency. RR intervals are intervals, not absolute heartbeat timestamps; multiple RR values within one notification share a receipt timestamp. Devices are not synchronized at the sensor level. Do not interpret these values as precisely aligned ECG or beat times. `elapsed_ms` uses `performance.now()` so wall-clock corrections do not change elapsed durations; `received_utc` can jump if the system clock changes. A device row stays visible and shows **OFFLINE** when Bluetooth disconnects or no notifications arrive for more than five seconds. Its label and last-reading time are retained, and a note distinguishes automatic reconnection, a paused monitor, permission problems, and a Bluetooth link that remains connected but sends no readings. A newly connected monitor gets a five-second grace period to send its first reading. Live heart rate and RR values are hidden while offline and return automatically with fresh data. The group average excludes offline and explicitly detached sensors. The connected counter counts Bluetooth links, so a silent-but-connected monitor can count as connected while its row correctly reports offline readings.
+If retries repeatedly fail, use **Find again** on the existing row. It requires a real click and selection, filters by the strap's exact advertised name when available, and verifies the selected device ID. A different ID does not inherit the participant label. **Pair HRM** excludes known advertised names where supported and rejects duplicate IDs; a new strap sharing a known name may also be hidden.
 
-This implementation captures standard heart rate and available RR intervals. Polar-specific raw ECG/accelerometer streaming, device clock commands, ANT+, and OS-level recording are outside its scope. Connection changes are logged as session events; automatic retries operate only while the page and browser permit them.
+While a chooser is pending, pending/retrying connections are suspended; healthy links keep recording. Cancelling the chooser restores eligible retries. **Stop waiting** releases the application's wait and leaves affected reconnects paused for explicit Resume/Find again. It cannot dismiss Chrome's native chooser; close that dialog with Esc if needed.
 
-## Recovery and long sessions
+Physical capacity and reconnection reliability depend on the monitor, Bluetooth adapter, operating system, browser, competing connections, and radio environment. Test the intended monitors together on the collection computer. Nothing runs after the page is closed, and neither wake locks nor synthetic tests guarantee uninterrupted hardware acquisition.
 
-IndexedDB stores session metadata, original measurement rows, and connection/label/visibility events. It is local to the browser profile and origin (including port). Closing the tab does not delete saved records, but clearing site data, private browsing, or browser eviction may do so. Recovery exports should not substitute for checked folder files in long collections. To preserve recordings saved by earlier versions, Beatstream retains the internal IndexedDB name `cooling-hubs-hr`; this is a storage compatibility identifier, not the application name. The legacy `pulsedeck-paired` setting is also retained so remembered monitors remain available on the same origin. Recovery export reads the selected session into memory; very large exports may exceed browser memory. Heart-rate display history is bounded to 30 minutes with at most one point per second (up to 1,801 points per device); RR display history is bounded to 30 minutes/8,000 points and respiration analysis to 120 seconds/512 intervals. Every notification is still recorded. The activity list is limited to 80 entries. Folder-write backlogs remain in memory until retried; resolve disk errors promptly. Old recovery records are retained until site data is cleared; export needed recordings before clearing it.
+## Local recovery and privacy
 
-## Repository
+Measurements and events are also journaled in IndexedDB in this browser profile and origin. Folder and journal failures are reported separately. Keep the profile: private browsing, clearing site data, or browser eviction can remove recovery records. Moving from localhost to GitHub Pages creates a different origin, so device permissions, participant labels, and recovery records do not automatically transfer.
 
-The application and suggested repository name are **Beatstream** (`beatstream`). This directory is a local Git repository. It has no remote configured. To create a hosted copy, create a remote repository and add its URL with `git remote add origin <url>`, then push your chosen branch. Recorded participant data is not part of the repository; `recordings/` is ignored as a convenience, and an output folder outside the source checkout is recommended.
+New recovery records use the `multibeat-hr` browser database. Recovery also discovers earlier app journals by their schema and session metadata when the browser supports database enumeration; it reads them without copying, modifying, or deleting them. In browsers without enumeration, older journals remain stored but cannot be listed by the new recovery tools. Paired IDs now use `multibeat-paired`. When that key is absent, one unambiguous prior `-paired` list is copied to it without deleting the original; conflicting lists are not automatically restored. Participant labels remain under `hr-labels`.
 
-Source layout: `hr-monitor.js` is the website import entry point; `src/view.js` contains static dashboard markup; `src/bluetooth.js` handles BLE notifications and reconnection; `src/capture.js` coordinates required-folder automatic capture; `src/recorder.js` implements journal and folder writing; `src/app.js` manages UI and sessions; `server.js` is the optional local static server. Standard browser modules make the app easy to inspect and modify without a toolchain.
+Open Developer Tools → Console and filter for **MultiBeat**. The `[MultiBeat][Recovery]` entry exposes `sessions()` and `download(sessionId)`; use Chrome's **Store object as global variable** action on that object to call them. Embeddings can use the mount controller:
 
-## Verification limits
+```js
+const sessions = await monitor.recovery.sessions();
+if (sessions.length) await monitor.recovery.download(sessions[0]);
+```
 
-Automated tests cover packet formats and malformed packets, subscription cleanup, CSV escaping, journaling order, append ordering and failure/retry without duplicate rows, UTF-8 byte offsets, contact-state serialization, synthetic RSA recovery and quality rejection, RR graph bounds/units, browser storage failure, required-folder gating, concurrent automatic setup, first-sample capture, pause/resume, retry backoff, silent-link recovery and cancellation, and a 48-device/2,880-measurement recorder workload. These do not establish physical device compatibility or simultaneous Bluetooth capacity. Real straps, browser permission prompts, IndexedDB durability, and folder API integration require testing on the collection computer.
+Recovery downloads JSONL containing original session metadata, measurements, and events. Exporting reads the selected journal session into memory, so very large exports can exceed browser memory. Recovery complements checked folder files; it is not a guarantee against storage loss. Bluetooth diagnostics include IDs, stages, errors, and retry delays, without raw measurements or participant labels.
 
-## Protocol and browser references
+Keep recordings, exports, browser profiles, and participant labels out of the repository. `recordings/` is ignored; choose an output folder outside the checkout.
+
+## Test locally without Node
+
+From the repository root, if Python 3 is installed:
+
+```sh
+python3 -m http.server 5173 --bind 127.0.0.1
+```
+
+Open **http://localhost:5173/** in desktop Chrome or Edge. Leave the terminal running; Ctrl+C stops the preview. Pause and save before refreshing to load source changes.
+
+This only serves static website files. All acquisition and recording still happen in the browser. Alternatively, maintainers with Node.js 22.7+ can run `node server.js` for the optional static preview helper.
+
+## Optional GitHub Pages hosting
+
+You can host the standalone app directly from an existing GitHub repository:
+
+1. In the `multiBeat` repository, open **Settings → Pages**.
+2. Choose **Deploy from a branch**, branch **main**, folder **/(root)**, and save.
+3. Open the URL GitHub displays, typically `https://YOUR_USERNAME.github.io/multiBeat/`.
+
+The included `.nojekyll` file allows the plain static assets to be served without Jekyll processing. There is no npm install, Node application, or application build step. Relative imports support the `/multiBeat/` subdirectory. Hosting publishes the app's source files; participant recordings remain on each visitor's computer. Keep recordings outside the repository before pushing or enabling Pages.
+
+See [GitHub's Pages publishing instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site). Hosting configuration is separate from editing this repository; these instructions do not create a remote or deploy anything automatically.
+
+## Development
+
+Use Node.js 22.7+ for the optional checks without installing packages. `.js` modules use Node's syntax detection; no package manifest is required.
+
+```sh
+node --test
+node --check hr-monitor.js
+node --check src/app.js
+node scripts/smoke.js
+```
+
+If a static preview is already running on port 5173, use `node scripts/smoke.js --reuse-server`. The smoke check verifies asset responses, not browser rendering or physical Bluetooth. Tests use synthetic data; they do not establish radio capacity or hardware reliability. Follow [AGENTS.md](AGENTS.md) when modifying the repository.
+
+| Path | Responsibility |
+| --- | --- |
+| `hr-monitor.js` | Public mount API, relative asset loading, teardown. |
+| `index.html` | Standalone website using the same mount API. |
+| `src/view.js`, `styles.css` | Dashboard markup, icons, and responsive styles. |
+| `src/app.js` | Interaction, device restoration, labels, and recovery tools. |
+| `src/bluetooth.js` | Packet parsing, notifications, cancellation, and reconnection. |
+| `src/capture.js`, `src/recorder.js` | Session lifecycle, CSV writes, and journal. |
+| `src/trends.js`, `src/device-state.js` | Bounded display history and live/offline status. |
+| `src/charts.js`, `vendor/uplot/` | Interactive HR/RR plots and pinned uPlot 1.6.32 with its MIT license. |
+| `src/settings.js` | Pairing settings and compatibility with earlier saved choices. |
+| `src/wake-lock.js` | Capture-only screen wake lock and its toggle. |
+| `test/`, `test-support/` | Node built-in tests and synthetic storage helpers. |
+| `server.js`, `scripts/smoke.js` | Optional local preview and asset verification. |
+
+## AI development disclosure
+
+MultiBeat was developed with assistance from AI tools, including OpenAI Codex, for code, interface design, documentation, testing, and troubleshooting. Project requirements and development decisions were directed by the human maintainer. AI assistance and automated tests do not establish clinical validity or guarantee compatibility with every monitor, browser, or Bluetooth adapter.
+
+## Third-party graph library
+
+[uPlot 1.6.32](https://github.com/leeoniya/uPlot/tree/1.6.32) is bundled under `vendor/uplot/` and loaded from the same origin as MultiBeat. Its MIT license and upstream source/checksums are included in that directory. Deploy `vendor/` alongside `src/`, `styles.css`, and `hr-monitor.js`. There is no npm installation or runtime CDN dependency.
+
+## References
 
 - [Bluetooth SIG Heart Rate Service](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/HRS_v1.0/out/en/index-en.html)
-- [Chrome: Communicating with Bluetooth devices](https://developer.chrome.com/docs/capabilities/bluetooth)
+- [Chrome: Web Bluetooth](https://developer.chrome.com/docs/capabilities/bluetooth)
+- [Chrome: Automatic reconnection](https://googlechrome.github.io/samples/web-bluetooth/automatic-reconnect-async-await.html)
+- [Chrome: Advertisement discovery and connection](https://googlechrome.github.io/samples/web-bluetooth/watch-advertisements-and-connect-async-await.html)
 - [Chrome: File System Access API](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)
-- [Powr Labs chest strap profile](https://www.powr-labs.com/products/chest-heart-rate-monitor)
-- [Polar H10 documentation](https://github.com/polarofficial/polar-ble-sdk/blob/master/documentation/products/PolarH10.md)
-
-Reconnection references: [Chrome automatic reconnect example](https://googlechrome.github.io/samples/web-bluetooth/automatic-reconnect.html) and [Web Bluetooth specification](https://bluetooth.spec.whatwg.org/).
+- [Chrome: Screen Wake Lock API](https://developer.chrome.com/docs/capabilities/web-apis/wake-lock)

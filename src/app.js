@@ -1,69 +1,93 @@
-import { parseHeartRate, ReconnectingMonitor } from './bluetooth.js';
+import { parseHeartRate, ReconnectingMonitor, pairingRequestOptions } from './bluetooth.js';
+import { setButtonLabel } from './view.js';
+import { CaptureWakeLock } from './wake-lock.js';
 import { Journal, Recorder } from './recorder.js';
 import { CaptureSession } from './capture.js';
 import { monitorDisplay } from './device-state.js';
-import { appendTrend, drawTrend } from './trends.js';
-import { RespirationEstimator, RESPIRATION_CONFIG } from './respiration.js';
+import { appendTrend, appendRRTrend } from './trends.js';
+import { TrendCharts } from './charts.js';
+import { loadPairedIds, savePairedIds } from './settings.js';
 
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
   const devices = new Map();
+  const charts = new TrendCharts();
   const journal = new Journal();
   const recorder = new Recorder(journal, updateControls);
   const capture = new CaptureSession(recorder, { metadata: sessionMetadata, onChange: updateControls });
   let dbReady = false, busy = false, destroyed = false, pausing = null;
-  let demoMode = false, demoTimer = null, wakeLock = null;
+  let lastStorageError = null;
+  let chooser = null;
+  let folderBrowsing = false;
+  const wakeLock = new CaptureWakeLock(navigator.wakeLock, renderWakeLock,
+    failure => console.warn('[MultiBeat][Wake lock]', { error: failure.name, message: failure.message }));
+  function renderWakeLock(state) {
+    if (destroyed) return;
+    $('keep-awake').disabled = state === 'unavailable';
+    $('wake-lock-state').textContent = {
+      unavailable: 'Unavailable', off: 'Off', idle: 'During capture', hidden: 'Tab hidden',
+      active: 'Active', requesting: 'Requesting…', released: 'Not active — toggle to retry'
+    }[state];
+    $('wake-lock-state').classList.toggle('wake-active', state === 'active');
+  }
   let savedLabels = {}, pairedIds = [];
   try { savedLabels = JSON.parse(localStorage.getItem('hr-labels') || '{}'); } catch {}
-  // Keep the legacy storage key so rebranding preserves previously authorized monitors.
-  try { const ids = JSON.parse(localStorage.getItem('pulsedeck-paired') || '[]'); if (Array.isArray(ids)) pairedIds = ids; } catch {}
+  try { pairedIds = loadPairedIds(localStorage); } catch {}
   const error = message => { if (destroyed) return; $('error').textContent = message; $('error').hidden = !message; };
 
   function sessionMetadata() {
     return {
-      session_id: 'beatstream-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
-      application: 'Beatstream', started_utc: new Date().toISOString(),
+      session_id: 'multibeat-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomUUID().slice(0, 8),
+      application: 'MultiBeat', started_utc: new Date().toISOString(),
       timestamp_basis: 'Browser receipt UTC (wall clock); elapsed_ms uses monotonic performance.now(). No sensor clock synchronization.',
-      format_version: 3, respiration_estimation: RESPIRATION_CONFIG, measurement_file: 'measurements.csv', event_file: 'events.jsonl', mode: demoMode ? 'simulation' : 'bluetooth',
+      format_version: 5, measurement_file: 'measurements.csv', event_file: 'events.jsonl', mode: 'bluetooth',
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name, label: d.label, simulated: d.simulated, status: d.status }))
     };
   }
   function event(kind, message, data = {}) {
     if (destroyed) return;
     const utc = new Date().toISOString();
-    const li = document.createElement('li');
-    const time = document.createElement('time'); time.textContent = new Date(utc).toLocaleTimeString();
-    li.append(time, document.createTextNode(message));
-    if ($('activity').firstElementChild?.classList.contains('muted')) $('activity').replaceChildren();
-    $('activity').prepend(li);
-    while ($('activity').children.length > 80) $('activity').lastElementChild.remove();
+    // Keep physiological values and participant labels out of diagnostic logs.
+    console.info('[MultiBeat][Activity]', { utc, event: kind, device_id: data.device_id });
     recorder.enqueue({ type: 'event', kind, received_utc: utc, elapsed_ms: capture.recording ? +(performance.now() - capture.started).toFixed(3) : null, message, ...data });
   }
   function updateControls() {
     if (destroyed) return;
-    const connected = [...devices.values()].some(d => d.status === 'connected');
+    acquireWakeLock();
+    const live = [...devices.values()].some(d => monitorDisplay(d, performance.now()).live);
     const settling = busy || !!pausing || !!capture.stopping;
     const ready = dbReady && !!capture.directory && capture.enabled && !settling;
-    $('connect').disabled = !ready || demoMode;
-    $('empty-connect').disabled = !ready || demoMode;
+    $('connect').disabled = !ready || folderBrowsing;
+    setButtonLabel($('connect'), chooser ? 'Choose in Chrome…' : 'Pair HRM', 'pair');
+    $('cancel-chooser').hidden = !chooser;
     $('connect').title = ready ? 'Pair another heart rate monitor' : 'Choose an output folder and enable capture first';
-    $('folder').disabled = !dbReady || settling || capture.recording || !!capture.starting;
+    $('folder').disabled = !dbReady || settling || capture.recording || !!capture.starting || folderBrowsing;
     $('folder').textContent = capture.directory ? 'Change folder' : 'Choose folder';
     $('folder').title = capture.recording ? 'Pause capture to change the output folder' : capture.directory ? `Output folder: ${capture.directory.name}` : 'Choose where readings will be saved';
-    $('demo').disabled = settling || !dbReady || !capture.directory || !demoMode && (!capture.enabled || capture.recording);
+    $('folder-open').hidden = !capture.directory;
+    $('folder-open').disabled = folderBrowsing || !!chooser;
+    $('folder-name').textContent = capture.directory?.name || '';
+    $('folder-open').title = `Browse ${capture.directory?.name || 'output folder'} in the native folder dialog. Recording destination stays unchanged; this does not launch Finder/Explorer.`;
+    $('folder-open').setAttribute('aria-label', `Browse output folder ${capture.directory?.name || ''}`);
     $('record').disabled = !dbReady || !capture.directory || settling || !!capture.starting;
-    $('record').textContent = capture.enabled ? 'Ⅱ Pause capture' : '▶ Resume capture';
-    const stateText = capture.recording ? (connected ? demoMode ? 'Capturing simulated data' : 'Capturing live data' : 'Waiting for monitors to return') : capture.starting ? 'Preparing recording…' : !capture.directory ? 'Choose a folder to begin' : capture.enabled ? 'Ready — connect a monitor' : 'Capture paused';
+    setButtonLabel($('record'), pausing || capture.stopping ? 'Saving…' : capture.enabled ? 'Pause capture' : 'Resume capture', pausing || capture.stopping ? null : capture.enabled ? 'pause' : 'resume');
+    const capturingLive = capture.recording && capture.enabled && live;
+    const stateText = capture.recording && capture.enabled ? (live ? 'Capturing live data' : 'Waiting for monitors to return') : capture.starting ? 'Preparing recording…' : !capture.directory ? 'Choose a folder to begin' : capture.enabled ? 'Ready — connect a monitor' : 'Capture paused';
     if ($('record-state').textContent !== stateText) $('record-state').textContent = stateText;
-    $('record-dot').classList.toggle('active', capture.recording);
-    $('samples').textContent = (recorder.count || 0).toLocaleString();
+    $('record-indicator').classList.toggle('is-recording', !!capturingLive);
+    $('record-indicator').title = stateText;
+    const storageError = [recorder.diskError, recorder.journalError].filter(Boolean).join('; ');
+    if (storageError && storageError !== lastStorageError) console.error('[MultiBeat][Storage]', storageError);
+    lastStorageError = storageError;
     $('retry').hidden = !recorder.diskError;
-    $('storage-state').style.color = recorder.diskError || recorder.journalError ? '#a0432b' : '';
-    if (recorder.diskError || recorder.journalError) {
-      $('storage-state').textContent = [recorder.diskError && `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes.`, recorder.journalError && `Browser recovery journal failed: ${recorder.journalError}. Recovery may be incomplete.`].filter(Boolean).join(' ');
-    } else if (capture.recording && recorder.directory && recorder.id) {
-      $('storage-state').textContent = `Folder: ${capture.directory.name} · ${recorder.pending.length ? 'Saving readings…' : recorder.savedBatches ? 'Up to date' : 'Waiting for readings'}`;
-    } else $('storage-state').textContent = capture.directory ? `Folder: ${capture.directory.name}` : 'An output folder is required before capture.';
+    const storageMessage = [
+      recorder.diskError && `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes.`,
+      recorder.journalError && `Browser recovery journal failed: ${recorder.journalError}. Recovery may be incomplete.`
+    ].filter(Boolean).join(' ');
+    $('storage-state').textContent = storageMessage;
+    $('storage-state').hidden = !storageMessage;
+    $('storage-state').style.color = storageMessage ? '#a0432b' : '';
+
   }
   async function prepareCapture() {
     if (destroyed) throw new DOMException('Dashboard removed.', 'AbortError');
@@ -74,7 +98,6 @@ export async function startDashboard(root) {
         sessionStartedEvent = true;
         event('recording_started', 'Capture started automatically.', { storage: 'folder_and_browser' });
         acquireWakeLock();
-        refreshSessions().catch(e => error(`Could not list recovery sessions: ${e.message}`));
       }
     } catch (e) {
       if (e.name !== 'AbortError') {
@@ -90,10 +113,9 @@ export async function startDashboard(root) {
     const node = fragment.querySelector('.device');
     const detail = fragment.querySelector('.device-detail');
     detail.id = 'trend-' + crypto.randomUUID();
-    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], rrHistory: [], respiration: new RespirationEstimator(), respiratoryEstimate: null, node, detail, expanded: false, expandedMetric: 'hr', manuallyPaused: false, manager: null };
+    const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], rrHistory: [], rrClock: {}, node, detail, expanded: false, expandedMetric: 'hr', manuallyPaused: false, manager: null };
     devices.set(id, d); $('devices').append(fragment);
-    node.querySelector('.device-index').textContent = `${simulated ? 'DEMO' : 'MONITOR'} ${String(devices.size).padStart(2, '0')}`;
-    node.querySelector('.device-name').textContent = `${name} · ${id}`;
+    node.querySelector('.device-name').textContent = name;
     node.querySelector('.device-name').title = `${name} · ${id}`;
     const toggles = [...node.querySelectorAll('.trend-toggle')];
     for (const toggle of toggles) {
@@ -111,6 +133,15 @@ export async function startDashboard(root) {
     };
     detail.querySelector('.graph-range').onchange = render;
     detail.querySelector('.graph-metric').onchange = e => { d.expandedMetric = e.target.value; render(); };
+    const graph = detail.querySelector('.history-chart');
+    const viewState = detail.querySelector('.graph-view-state');
+    graph.addEventListener('chartviewchange', e => {
+      const seconds = e.detail.windowMs / 1000;
+      viewState.textContent = `Live · last ${seconds >= 60 ? `${+(seconds / 60).toFixed(1)} min` : `${seconds}s`}`;
+    });
+    detail.querySelector('.graph-zoom-in').onclick = () => charts.zoom(graph, 0.5);
+    detail.querySelector('.graph-zoom-out').onclick = () => charts.zoom(graph, 2);
+    detail.querySelector('.graph-live').onclick = () => charts.reset(graph);
     const input = node.querySelector('.device-label'); input.value = d.label;
     input.setAttribute('aria-label', 'Participant label for ' + name);
     const update = node.querySelector('.label-update');
@@ -128,7 +159,6 @@ export async function startDashboard(root) {
     update.onclick = () => {
       if (destroyed || input.value.trim() === d.label) return;
       const previous = d.label; d.label = input.value.trim(); input.value = d.label;
-      d.respiration.reset('label_changed'); d.respiratoryEstimate = d.respiration.result;
       savedLabels[id] = d.label;
       try { localStorage.setItem('hr-labels', JSON.stringify(savedLabels)); } catch { error('Labels cannot be saved between visits. Current labels will still be recorded.'); }
       event('label_changed', `${name}: label changed to ${d.label || '(none)'}`, { device_id: id, previous_label: previous, label: d.label });
@@ -147,8 +177,8 @@ export async function startDashboard(root) {
         if (destroyed) return;
         const previous = d.status; d.status = state; d.reconnectReason = detail.reason;
         if (state === 'connecting') d.connectionStarted = performance.now();
-        if (state !== 'connected') { d.respiration.reset(state === 'paused' ? 'paused' : 'gap_reset'); d.respiratoryEstimate = d.respiration.result; }
-        if (state === 'connected') { d.connectedAt = performance.now(); d.hasConnected = true; }
+        if (state !== 'connected') d.rrClock = {};
+        if (state === 'connected') { d.connectedAt = performance.now(); d.hasConnected = true; d.connectionProblem = ''; }
         if (state === 'connected') event('connected', `${d.label || d.name} connected; capturing data.`, { device_id: id, label: d.label, device_name: d.name });
         if (state === 'reconnecting' && previous === 'connected') {
           if (detail.reason === 'no_data') event('stream_stalled', `${d.label || d.name}: no valid readings for 15 seconds. Refreshing the Bluetooth connection automatically.`, { device_id: id });
@@ -157,15 +187,21 @@ export async function startDashboard(root) {
         if (state === 'permission') error(`${d.name}: ${detail.message}. Restore Bluetooth permission, then reconnect.`);
         render();
       },
-      onError: e => event('connection_error', `${d.label || d.name}: ${e.message}`, { device_id: id })
+      onError: e => {
+        d.connectionProblem = e.name === 'TimeoutError' ? 'Chrome did not complete the connection. Try Find again.' : e.message;
+        event('connection_error', `${d.label || d.name}: ${e.message}`, { device_id: id });
+        render();
+      }
     });
+    node.querySelector('.device-find').onclick = () => chooseDevice(d);
     node.querySelector('.device-action').onclick = async () => {
       if (destroyed || busy) return;
       if (d.manager?.enabled || simulated && d.status === 'connected') {
         d.manuallyPaused = true;
-        if (d.manager) await d.manager.stop(); else { d.status = 'paused'; d.respiration.reset('paused'); d.respiratoryEstimate = d.respiration.result; }
+        if (d.manager) await d.manager.stop(); else { d.status = 'paused'; d.rrClock = {}; }
         event('monitor_paused', `${d.label || d.name} paused; automatic reconnection disabled for this monitor.`, { device_id: id });
       } else if (capture.enabled) {
+        if (chooser) return error('Chrome device selection is still pending. Finish selection or use Stop waiting before reconnecting.');
         d.manuallyPaused = false;
         if (d.manager) void d.manager.start();
         else { await prepareCapture(); d.status = 'connected'; }
@@ -174,59 +210,121 @@ export async function startDashboard(root) {
     };
     return d;
   }
-  async function chooseDevice() {
+  async function chooseDevice(target = null) {
     if (!capture.directory || !capture.enabled) return error('Choose an output folder and enable capture before pairing monitors.');
     if (!navigator.bluetooth) return error('Web Bluetooth is unavailable. Use desktop Chrome or Edge on a supported computer.');
-    if (demoMode) return error('End the demo before connecting physical monitors.');
+    if (chooser) return error('A Bluetooth chooser has already been requested from Chrome. Check Chrome for the dialog and press Esc to cancel it if needed.');
+    const selection = chooser = { timer: null, suspended: [], abort: new AbortController() };
+    error(''); updateControls();
     try {
-      const device = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
+      // Stop pending native requests BEFORE opening the chooser. Do not await here:
+      // requestDevice must run within the original click's user activation.
+      for (const d of devices.values()) {
+        if (d.manager?.enabled && (d.manager.state !== 'connected' || d === target)) {
+          const stopping = d.manager.stop();
+          selection.suspended.push({ d, generation: d.manager.generation, stopping });
+        }
+      }
+      console.info('[MultiBeat][Chooser] ' + JSON.stringify({
+        event: 'requested', device_id: target?.id, suspended_attempts: selection.suspended.length,
+        user_activation: navigator.userActivation?.isActive, focused: document.hasFocus(),
+        visibility: document.visibilityState, secure_context: window.isSecureContext, browser: navigator.userAgent,
+        bluetooth_allowed: document.permissionsPolicy?.allowsFeature('bluetooth') ?? null
+      }));
+      const request = navigator.bluetooth.requestDevice(pairingRequestOptions([...devices.values()].map(d => d.bluetooth), target?.bluetooth));
+      selection.timer = setTimeout(() => {
+        if (destroyed || chooser !== selection) return;
+        console.warn('[MultiBeat][Chooser] Still waiting for Chrome to return a device selection.');
+        error('Still waiting for Chrome’s Bluetooth chooser. Check for its dialog; press Esc in Chrome to cancel. Use Stop waiting to restore the app controls. This cannot dismiss Chrome’s native chooser; press Esc in Chrome. Existing recordings are preserved.');
+      }, 20000);
+      const device = await new Promise((resolve, reject) => {
+        const abort = () => { selection.abort.signal.removeEventListener('abort', abort); reject(selection.abort.signal.reason); };
+        selection.abort.signal.addEventListener('abort', abort, { once: true });
+        Promise.resolve(request).then(value => { selection.abort.signal.removeEventListener('abort', abort); resolve(value); }, failure => { selection.abort.signal.removeEventListener('abort', abort); reject(failure); });
+      });
+      console.info('[MultiBeat][Chooser] Device selected', { device_id: device.id });
       if (destroyed || !capture.enabled) return;
+      if (target && device.id !== target.id) throw new Error('That selection has a different browser device ID. Use Pair HRM to add it; the existing participant label has not been moved.');
+      if (!target && devices.has(device.id)) throw new Error('This HRM is already in the dashboard. Use its Resume or Find again button.');
       error('');
       if (!pairedIds.includes(device.id)) pairedIds.push(device.id);
-      try { localStorage.setItem('pulsedeck-paired', JSON.stringify(pairedIds)); }
+      try { savePairedIds(localStorage, pairedIds); }
       catch { error('This monitor will reconnect on this page, but could not be remembered for future visits.'); }
-      const d = devices.get(device.id) || makeDevice(device.id, device.name || 'Heart rate monitor', false, device);
+      const existing = devices.get(device.id);
+      const d = existing || makeDevice(device.id, device.name || 'Heart rate monitor', false, device);
+      if (existing) {
+        await d.manager.stop();
+        if (destroyed || !capture.enabled) return;
+        d.bluetooth = device; d.manager.device = device;
+        console.info('[MultiBeat][Chooser] Restarting selected monitor connection', { device_id: device.id });
+      }
       d.manuallyPaused = false;
       void d.manager.start();
-    } catch (e) { if (e.name !== 'NotFoundError') error(`Bluetooth chooser: ${e.message}`); }
+    } catch (e) {
+      console.warn('[MultiBeat][Chooser] ' + JSON.stringify({ error: e.name, message: e.message }));
+      if (e.name === 'AbortError') error('Stopped waiting. Affected reconnects remain paused because Chrome may still have its chooser open. Press Esc in Chrome, then use Resume or Find again.');
+      else if (e.name !== 'NotFoundError') error(`Bluetooth chooser: ${e.message}`);
+    } finally {
+      clearTimeout(selection.timer);
+      if (chooser === selection) chooser = null;
+      // Cancelling selection must restore retries, but never override an explicit pause.
+      for (const { d, generation, stopping } of selection.suspended) {
+        await stopping;
+        if (!destroyed && capture.enabled && !d.manuallyPaused && !d.manager.enabled && d.manager.generation === generation) void d.manager.start();
+      }
+      updateControls();
+    }
   }
-  $('connect').onclick = chooseDevice; $('empty-connect').onclick = chooseDevice;
+  $('connect').onclick = () => chooseDevice();
+  $('cancel-chooser').onclick = () => {
+    if (!chooser) return;
+    for (const { d, generation } of chooser.suspended) {
+      if (d.manager.generation === generation && !d.manager.enabled) d.manuallyPaused = true;
+    }
+    event('chooser_wait_stopped', 'Stopped waiting for Chrome; affected reconnects remain paused until explicitly resumed.');
+    chooser.abort.abort(new DOMException('Stopped waiting for Chrome device selection.', 'AbortError'));
+    render();
+  };
+  const onConnectPointer = e => {
+    const button = e.target.closest?.('#connect');
+    if (!button) return;
+    console.info('[MultiBeat][Controls] ' + JSON.stringify({ event: 'connect_pressed',
+      disabled: button.disabled, storage_ready: dbReady, folder_selected: !!capture.directory,
+      capture_enabled: capture.enabled, busy, pausing: !!pausing, saving: !!capture.stopping, chooser_pending: !!chooser
+    }));
+    if (button.disabled) error(pausing || capture.stopping ? 'Capture is still saving. Check the storage status and console for failures.' :
+      busy ? 'Another capture operation is still in progress.' :
+      !dbReady ? 'Browser storage is not ready. Check the visible storage error.' :
+      !capture.directory ? 'Choose an output folder before connecting a monitor.' : 'Resume capture before connecting a monitor.');
+  };
+  root.addEventListener('pointerdown', onConnectPointer, true);
+
   function receive(d, sample) {
     if (destroyed || !capture.enabled) return;
     const monotonic = performance.now(), utc = new Date().toISOString();
     d.last = { ...sample, at: monotonic, utc };
     appendTrend(d.history, monotonic, sample.bpm);
-    d.respiratoryEstimate = d.respiration.add(sample, monotonic);
-    for (const point of d.respiration.lastBatch) appendTrend(d.rrHistory, point.at, point.rrMs, { everyMs: 0, maxPoints: 8000 });
+    appendRRTrend(d.rrHistory, sample, monotonic, d.rrClock);
     capture.measurement(d, sample, { utc, monotonic });
   }
   function draw(d, now) {
     if (d.node.hidden) return;
-    drawTrend(d.node.querySelector('.mini-hr'), d.history, { now, simulated: d.simulated });
-    drawTrend(d.node.querySelector('.mini-rr'), d.rrHistory, { now, simulated: d.simulated, metric: 'rr' });
-    if (d.expanded) drawTrend(d.detail.querySelector('.history-chart'), d.expandedMetric === 'rr' ? d.rrHistory : d.history, {
+    charts.draw(d.node.querySelector('.mini-hr'), d.history, { now, simulated: d.simulated });
+    charts.draw(d.node.querySelector('.mini-rr'), d.rrHistory, { now, simulated: d.simulated, metric: 'rr' });
+    if (d.expanded) charts.draw(d.detail.querySelector('.history-chart'), d.expandedMetric === 'rr' ? d.rrHistory : d.history, {
       now, simulated: d.simulated, detailed: true, metric: d.expandedMetric,
       windowMs: Number(d.detail.querySelector('.graph-range').value)
     });
-  }
-  function respirationText(d, live) {
-    if (!live) return 'Experimental respiration estimate unavailable while the monitor is offline.';
-    const result = d.respiratoryEstimate;
-    if (result?.status === 'ok') return 'Estimated respiration: ' + result.rate + ' breaths/min · experimental RR-based estimate, not a direct breathing measurement.';
-    if (result?.status === 'no_contact') return 'Respiration estimate unavailable: no skin contact.';
-    if (result?.status === 'no_rr') return 'Respiration estimate unavailable: the monitor has not supplied RR intervals.';
-    if (!result || ['warming_up', 'gap_reset', 'label_changed', 'timing_gap', 'paused'].includes(result.status)) return 'Experimental respiration estimate: collecting approximately two minutes of continuous RR history.';
-    return 'Respiration estimate withheld: RR data do not meet the experimental signal-quality checks.';
+    else charts.destroy(d.detail.querySelector('.history-chart'));
   }
   function render() {
     if (destroyed) return;
     const now = performance.now(), filter = $('search').value.trim().toLowerCase();
-    let connected = 0; const live = [];
+    let connected = 0;
     for (const d of devices.values()) {
       const display = monitorDisplay(d, now);
       d.updateLabelEditor();
       if (d.status === 'connected') connected++;
-      if (display.live && d.last.contact !== false) live.push(d.last.bpm);
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);
       d.detail.hidden = !d.expanded || d.node.hidden;
       for (const toggle of d.node.querySelectorAll('.trend-toggle')) {
@@ -237,23 +335,28 @@ export async function startDashboard(root) {
       const metricName = d.expandedMetric === 'rr' ? 'RR interval' : 'Heart rate';
       d.detail.querySelector('.graph-title').textContent = (d.label || d.name) + ' · ' + metricName + ' history';
       d.detail.querySelector('.history-chart').setAttribute('aria-label', metricName + ' history with time and ' + (d.expandedMetric === 'rr' ? 'milliseconds' : 'beats per minute') + ' axes');
-      d.detail.querySelector('.respiration-note').textContent = respirationText(d, display.live);
       const status = d.node.querySelector('.device-status');
       if (status.textContent !== display.text) status.textContent = display.text;
       status.className = 'device-status' + (display.offline ? ' offline' : !display.live ? ' stale' : '');
       d.node.classList.toggle('is-offline', display.offline);
       const note = d.node.querySelector('.connection-note');
-      note.textContent = display.note; note.hidden = !display.note;
+      const connectionNote = [display.note, !display.live && d.connectionProblem].filter(Boolean).join(' · ');
+      note.textContent = connectionNote; note.hidden = !connectionNote;
       d.node.querySelector('.reading strong').textContent = display.live ? d.last.bpm : '—';
       d.node.querySelector('.contact').textContent = display.live && d.last.contact === false ? 'No skin contact' : '';
-      d.node.querySelector('.last-seen').textContent = d.last ? `${new Date(d.last.utc).toLocaleTimeString()} · ${Math.floor((now - d.last.at) / 1000)}s ago` : 'No samples yet';
       const action = d.node.querySelector('.device-action');
-      action.textContent = d.manager?.enabled || d.simulated && d.status === 'connected' ? 'Pause monitor' : 'Reconnect';
+      const canPause = d.manager?.enabled || d.simulated && d.status === 'connected';
+      setButtonLabel(action, canPause ? 'Pause' : 'Resume', canPause ? 'pause' : 'resume');
+      action.setAttribute('aria-label', `${canPause ? 'Pause' : 'Resume'} ${d.label || d.name}`);
       action.disabled = busy || !capture.enabled;
+      const find = d.node.querySelector('.device-find');
+      find.hidden = d.simulated || display.live;
+      find.disabled = busy || !capture.enabled;
+      find.textContent = chooser ? 'Choose in Chrome…' : 'Find again';
+      find.setAttribute('aria-label', 'Find ' + (d.label || d.name) + ' again in Chrome');
       draw(d, now);
     }
     $('connected').textContent = String(connected);
-    $('average').innerHTML = `${live.length ? Math.round(live.reduce((a,b) => a+b, 0) / live.length) : '—'} <small>bpm</small>`;
     $('device-count').textContent = devices.size;
     $('empty').hidden = devices.size > 0;
     const seconds = Math.floor((capture.recording ? now - capture.started : capture.elapsed) / 1000);
@@ -262,6 +365,7 @@ export async function startDashboard(root) {
   }
   $('search').oninput = render;
   function startMonitors() {
+    if (chooser) return;
     for (const d of devices.values()) if (!d.manuallyPaused) {
       if (d.manager) void d.manager.start();
       else d.status = 'connected';
@@ -269,40 +373,48 @@ export async function startDashboard(root) {
   }
   $('folder').onclick = async () => {
     if (!window.showDirectoryPicker) return error('Direct folder writing is required. Use desktop Chrome or Edge with the File System Access API.');
-    if (busy) return;
+    if (busy || folderBrowsing) return;
     busy = true; updateControls();
     try {
       const directory = await window.showDirectoryPicker({ mode: 'readwrite', id: 'hr-recordings' });
       if (destroyed) return;
       capture.setDirectory(directory); capture.resume(); error('');
-      if (demoMode) await prepareCapture();
       startMonitors();
     } catch (e) { if (e.name !== 'AbortError') error(`Folder access: ${e.message}`); }
     finally { busy = false; updateControls(); }
   };
-  async function acquireWakeLock() {
-    if (!capture.recording || wakeLock && !wakeLock.released || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  $('folder-open').onclick = async () => {
+    if (!capture.directory || folderBrowsing || chooser) return;
+    folderBrowsing = true; updateControls();
     try {
-      const lock = await navigator.wakeLock.request('screen');
-      if (destroyed || !capture.recording) await lock.release(); else wakeLock = lock;
-    } catch { /* Computer sleep can still interrupt capture. */ }
+      // Browsing never replaces the destination, even if another folder is selected.
+      await window.showDirectoryPicker({ mode: 'read', startIn: capture.directory, id: 'hr-recordings-browse' });
+    } catch (failure) {
+      if (failure.name !== 'AbortError') error(`Could not browse the output folder: ${failure.message}`);
+    } finally { folderBrowsing = false; updateControls(); }
+  };
+  function acquireWakeLock() {
+    wakeLock.update({ enabled: $('keep-awake').checked, recording: capture.recording && capture.enabled,
+      visible: document.visibilityState === 'visible' });
   }
+  $('keep-awake').onchange = acquireWakeLock;
   async function pauseCapture() {
     if (pausing) return pausing;
+    console.info('[MultiBeat][Capture]', { event: 'pause_requested', pending_records: recorder.pending.length });
     if (capture.recording) event('recording_stopped', 'Capture paused; saving remaining data.');
     const saving = capture.pause();
-    const stops = [...devices.values()].map(d => { if (d.manager) return d.manager.stop(); d.status = 'paused'; d.respiration.reset('paused'); d.respiratoryEstimate = d.respiration.result; });
+    const stops = [...devices.values()].map(d => { if (d.manager) return d.manager.stop(); d.status = 'paused'; d.rrClock = {}; });
     pausing = (async () => {
       await Promise.all([saving, ...stops]);
       sessionStartedEvent = false;
-      await wakeLock?.release(); wakeLock = null;
-      if (dbReady && !destroyed) await refreshSessions();
+      console.info('[MultiBeat][Capture]', { event: 'pause_completed', pending_records: recorder.pending.length });
     })().finally(() => { pausing = null; updateControls(); });
     return pausing;
   }
   const onVisibilityChange = () => {
     if (capture.recording && document.visibilityState === 'hidden') event('tab_hidden', 'Tab hidden; browser throttling or sleep can interrupt capture.');
     acquireWakeLock();
+    if (document.visibilityState === 'visible') render();
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
   $('record').onclick = async () => {
@@ -312,8 +424,8 @@ export async function startDashboard(root) {
       error('');
       if (capture.enabled) await pauseCapture();
       else {
+        console.info('[MultiBeat][Capture]', { event: 'resume_requested' });
         capture.resume();
-        if (demoMode) await prepareCapture();
         startMonitors();
       }
     } catch (e) { error(e.message); }
@@ -324,85 +436,25 @@ export async function startDashboard(root) {
     try { await recorder.flush(); if (!capture.recording) await recorder.stop(); }
     finally { $('retry').disabled = false; }
   };
-  $('demo').onclick = async () => {
-    if (busy) return;
-    busy = true; updateControls(); error('');
-    try {
-      if (demoMode) {
-        await pauseCapture(); clearInterval(demoTimer); demoTimer = null; demoMode = false;
-        for (const [id,d] of devices) if (d.simulated) { d.node.remove(); d.detail.remove(); devices.delete(id); }
-        $('demo').textContent = 'Try demo'; $('demo-notice').hidden = true;
-        capture.resume(); event('demo_stopped', 'Simulation ended.');
-        return;
-      }
-      if (devices.size) throw new Error('Use a fresh page with no remembered monitors to run the isolated demo.');
-      if (!capture.directory || !capture.enabled) throw new Error('Choose an output folder before running the demo.');
-      demoMode = true;
-      for (let i = 0; i < 12; i++) {
-        const d = makeDevice(`demo-${i + 1}`, `Simulated HRM ${String(i+1).padStart(2,'0')}`, true);
-        d.label = `Participant ${String(i+1).padStart(2,'0')}`; d.node.querySelector('.device-label').value = d.label; d.status = 'connected';
-      }
-      await prepareCapture();
-      const tick = () => {
-        if (!capture.recording || !capture.enabled) return;
-        let i = 0;
-        for (const d of devices.values()) {
-          if (d.status !== 'connected') { i++; continue; }
-          const now = performance.now();
-          if (d.demoNextBeat == null || now - d.demoNextBeat > 5000) {
-            d.demoNextBeat = now; d.demoRR = Math.round(60 / (66 + i*2) * 1024);
-          }
-          const rr = [];
-          while (d.demoNextBeat <= now && rr.length < 20) {
-            rr.push(d.demoRR);
-            const hr = 66 + i*2 + 3*Math.sin(2*Math.PI*(0.18+i*0.005)*d.demoNextBeat/1000);
-            d.demoRR = Math.round(60/hr*1024); d.demoNextBeat += d.demoRR*1000/1024;
-          }
-          const bpm = Math.round(60*1024/d.demoRR);
-          receive(d, { bpm, contact: true, energy: null, rr, rrMs: rr.map(n => n * 1000 / 1024) }); i++;
-        }
-        render();
-      };
-      demoTimer = setInterval(tick, 1000); tick();
-      $('demo').textContent = 'End demo'; $('demo-notice').hidden = false;
-      event('demo_started', 'Simulated monitors connected. No physical devices are involved.');
-    } catch (e) {
-      if (demoMode && demoTimer === null) {
-        demoMode = false;
-        for (const [id, d] of devices) if (d.simulated) { d.node.remove(); d.detail.remove(); devices.delete(id); }
-        $('demo-notice').hidden = true;
-        $('demo').textContent = 'Try demo';
-      }
-      error(e.message);
-    }
-    finally { busy = false; render(); }
-  };
-  async function refreshSessions() {
-    const selected = $('saved').value;
-    const sessions = await journal.sessions();
-    if (destroyed) return;
-    $('saved').replaceChildren();
-    for (const id of sessions) { const option = document.createElement('option'); option.value = id; option.textContent = id; $('saved').append(option); }
-    if (!sessions.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No saved recordings'; $('saved').append(option); }
-    if (sessions.includes(selected)) $('saved').value = selected;
-    $('export').disabled = !sessions.length;
-  }
-  $('export').onclick = async () => {
-    if (!$('saved').value) return;
-    $('export').disabled = true;
-    try {
-      const session = $('saved').value;
+  // Exposed on the mount controller and in DevTools, without a backup panel.
+  const recovery = {
+    async sessions() { return journal.sessions(); },
+    async download(session) {
       await recorder.tail;
-      const rows = await journal.all(session);
+      const ids = session ? [session] : await journal.sessions();
+      const id = ids[0];
+      if (!id) throw new Error('No saved recordings');
+      const rows = await journal.all(id);
       const blob = new Blob(rows.map(r => JSON.stringify(r.value) + '\n'), { type: 'application/x-ndjson' });
-      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${session}-recovery.jsonl`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (e) { error(`Recovery export failed: ${e.message}`); }
-    finally { if (!destroyed) $('export').disabled = false; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `${id}-recovery.jsonl`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
   };
   async function restorePairedDevices() {
     if (!pairedIds.length) return;
     if (!navigator.bluetooth?.getDevices) {
-      event('restore_unavailable', 'This browser cannot restore paired monitors automatically. Choose the output folder, then use Connect monitor.');
+      event('restore_unavailable', 'This browser cannot restore paired monitors automatically. Choose the output folder, then use Pair HRM.');
       return;
     }
     try {
@@ -411,7 +463,7 @@ export async function startDashboard(root) {
       for (const device of authorized) if (pairedIds.includes(device.id) && !devices.has(device.id)) makeDevice(device.id, device.name || 'Heart rate monitor', false, device);
       if (capture.enabled) startMonitors();
       event('paired_restored', 'Remembered monitors restored. Select an output folder to enable automatic capture and reconnection.');
-    } catch (e) { event('restore_failed', `Could not restore paired monitors: ${e.message}. Use Connect monitor.`); }
+    } catch (e) { event('restore_failed', `Could not restore paired monitors: ${e.message}. Use Pair HRM.`); }
   }
   const onBeforeUnload = e => {
     if (capture.recording || recorder.pending.length) { e.preventDefault(); e.returnValue = ''; }
@@ -424,13 +476,18 @@ export async function startDashboard(root) {
     $('compatibility').textContent = 'Capture requires direct folder access. Use desktop Chrome or Edge on HTTPS with Web Bluetooth and the File System Access API. No folder means no recording.';
   }
   updateControls();
-  try { await journal.open(); dbReady = true; await refreshSessions(); }
+  try { await journal.open(); dbReady = true; console.info('[MultiBeat][Recovery] Local recovery tools (sessions / download):', recovery); }
   catch (e) { error(`Browser recovery storage unavailable: ${e.message}. Enable site storage to capture data.`); }
   await restorePairedDevices();
   render();
   return {
+    recovery,
     async destroy() {
-      clearInterval(renderTimer); clearInterval(flushTimer); clearInterval(demoTimer);
+      charts.destroyAll();
+      wakeLock.destroy();
+      clearInterval(renderTimer); clearInterval(flushTimer);
+      if (chooser) { clearTimeout(chooser.timer); chooser.abort.abort(new DOMException('Dashboard removed.', 'AbortError')); }
+      root.removeEventListener('pointerdown', onConnectPointer, true);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('beforeunload', onBeforeUnload);
       const paused = pauseCapture();

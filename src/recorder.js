@@ -1,4 +1,4 @@
-export const COLUMNS = ['session_id','sequence','received_utc','elapsed_ms','device_id','device_name','label','simulated','heart_rate_bpm','contact_detected','energy_expended_kj','rr_ticks_1024','rr_ms','respiratory_rate_est_bpm','respiratory_rate_status','respiratory_rate_fit','respiratory_rate_window_s','respiratory_rate_age_s'];
+export const COLUMNS = ['session_id','sequence','received_utc','elapsed_ms','device_id','device_name','label','simulated','heart_rate_bpm','contact_detected','energy_expended_kj','rr_ticks_1024','rr_ms'];
 export function csvCell(value) {
   let s = value == null ? '' : String(value);
   // Prevent spreadsheet formula execution in user-provided labels and device names.
@@ -12,8 +12,7 @@ export const csv = rows => CSV_HEADER + csvRows(rows);
 export class Journal {
   async open() {
     this.db = await new Promise((resolve, reject) => {
-      // Retain this storage name so existing recordings remain recoverable after rebranding.
-      const r = indexedDB.open('cooling-hubs-hr', 1);
+      const r = indexedDB.open('multibeat-hr', 1);
       r.onupgradeneeded = () => { const s = r.result.createObjectStore('records', { keyPath: 'id', autoIncrement: true }); s.createIndex('session', 'session'); };
       r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
     });
@@ -25,20 +24,64 @@ export class Journal {
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('Local storage transaction aborted'));
     });
   }
-  sessions() {
+  readSessions(db) {
     return new Promise((resolve, reject) => {
       const sessions = [];
-      const r = this.db.transaction('records').objectStore('records').index('session').openKeyCursor(null, 'prevunique');
+      const r = db.transaction('records').objectStore('records').index('session').openKeyCursor(null, 'prevunique');
       r.onsuccess = () => { const cursor = r.result; if (!cursor) return resolve(sessions); sessions.push(cursor.key); cursor.continue(); };
       r.onerror = () => reject(r.error);
     });
   }
-  all(session) {
+  readRows(db, session) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('records');
+      const tx = db.transaction('records');
       const r = session ? tx.objectStore('records').index('session').getAll(session) : tx.objectStore('records').getAll();
       r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
     });
+  }
+  async withLegacyJournals(read) {
+    // Discover prior app journals by schema and session metadata, not old brand
+    // database names. Read only during recovery; never migrate/delete recordings.
+    if (typeof indexedDB.databases !== 'function') return [];
+    const results = [];
+    for (const { name } of await indexedDB.databases()) {
+      if (!name || name === this.db.name) continue;
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.onupgradeneeded = () => request.transaction.abort(); // Do not recreate a database removed after enumeration.
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => request.error?.name === 'AbortError' ? resolve(null) : reject(request.error);
+      });
+      if (!db) continue;
+      try {
+        if (!db.objectStoreNames.contains('records')) continue;
+        const store = db.transaction('records').objectStore('records');
+        if (store.keyPath !== 'id' || !store.autoIncrement || !store.indexNames.contains('session') ||
+            store.index('session').keyPath !== 'session') continue;
+        const first = await new Promise((resolve, reject) => {
+          const request = store.openCursor();
+          request.onsuccess = () => resolve(request.result?.value);
+          request.onerror = () => reject(request.error);
+        });
+        const metadata = first?.value;
+        const versionedSession = typeof first?.session === 'string' && metadata?.session_id === first.session &&
+          Number.isInteger(metadata.format_version) && metadata.format_version >= 1 && metadata.format_version <= 5;
+        if (metadata?.type !== 'session' ||
+            !(['MultiBeat', 'Beatstream'].includes(metadata.application) || versionedSession)) continue;
+        for (const row of await read(db)) results.push(row);
+      } finally { db.close(); }
+    }
+    return results;
+  }
+  async sessions() {
+    const current = await this.readSessions(this.db);
+    const legacy = await this.withLegacyJournals(db => this.readSessions(db));
+    return [...new Set([...current, ...legacy])].sort().reverse();
+  }
+  async all(session) {
+    const current = await this.readRows(this.db, session);
+    const legacy = await this.withLegacyJournals(db => this.readRows(db, session));
+    return [...legacy, ...current];
   }
 }
 

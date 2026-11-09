@@ -19,6 +19,7 @@ export async function mountHeartRateMonitor(container) {
     const controller = await startDashboard(root);
     let destroyed = false;
     return {
+      recovery: controller.recovery,
       async destroy() {
         if (destroyed) return;
         destroyed = true;

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 const p = process.argv.includes('--reuse-server') ? null : spawn(process.execPath, ['server.js'], { cwd: new URL('..', import.meta.url) });
 try {
   if (p) await new Promise((resolve,reject) => { p.stdout.once('data',resolve); p.once('error',reject); p.once('exit',code=>reject(new Error('Server exited '+code))); p.stderr.on('data',data=>process.stderr.write(data)); });
-  for (const path of ['/', '/styles.css', '/hr-monitor.js', '/src/view.js', '/src/app.js', '/src/bluetooth.js', '/src/recorder.js', '/src/capture.js', '/src/device-state.js', '/src/trends.js', '/src/respiration.js']) {
+  for (const path of ['/', '/styles.css', '/hr-monitor.js', '/src/view.js', '/src/app.js', '/src/bluetooth.js', '/src/recorder.js', '/src/capture.js', '/src/device-state.js', '/src/trends.js', '/src/wake-lock.js', '/src/charts.js', '/src/settings.js', '/vendor/uplot/uPlot.esm.js', '/vendor/uplot/uPlot.min.css']) {
     const response = await fetch('http://localhost:5173'+path);
     if (response.status !== 200) throw new Error(path+' '+response.status);
     console.log(path, response.status, response.headers.get('content-type'));

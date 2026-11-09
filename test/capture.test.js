@@ -28,6 +28,7 @@ test('concurrent monitors share one automatic session and capture their first sa
   const managers = Array.from({ length: 32 }, (_, i) => {
     const d = { ...device, id: `hrm-${i}` };
     return new ReconnectingMonitor(d, {
+      onLog: () => {},
       beforeNotifications: () => s.capture.prepare(),
       onSample: () => s.capture.measurement(d, sample),
       subscribeFn: async (device, onSample, onDisconnect, { beforeNotifications }) => {
@@ -49,6 +50,7 @@ test('a returning monitor continues the same session and measurement sequence', 
   const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume();
   let lost, retry;
   const manager = new ReconnectingMonitor(device, {
+    onLog: () => {},
     beforeNotifications: () => s.capture.prepare(), onSample: () => s.capture.measurement(device, sample),
     schedule: fn => { retry = fn; return 1; }, cancel: () => {},
     subscribeFn: async (device, onSample, onDisconnect, { beforeNotifications }) => {
@@ -106,6 +108,7 @@ test('silent-link recovery keeps the recording session, participant label, and C
   const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume();
   const timers = new Map(); let id = 0;
   const manager = new ReconnectingMonitor(device, {
+    onLog: () => {},
     beforeNotifications: () => s.capture.prepare(), onSample: () => s.capture.measurement(device, sample),
     schedule: fn => { const key = ++id; timers.set(key, fn); return key; }, cancel: key => timers.delete(key),
     subscribeFn: async (device, onSample, onDisconnect, { beforeNotifications }) => {
@@ -122,23 +125,18 @@ test('silent-link recovery keeps the recording session, participant label, and C
   assert.equal(s.records.filter(r => r.value.type === 'session').length, 1);
 });
 
-test('CSV preserves reported contact states, raw RR and separately identified experimental estimates', async () => {
+test('raw HR/RR capture preserves optional values and contact states without derived fields', async () => {
   const s = setup(); s.capture.setDirectory(s.directory); s.capture.resume(); await s.capture.prepare();
-  const participant = { ...device, respiratoryEstimate: { rate: 12.4, status: 'ok', quality: 0.83, windowS: 119.2, computedAt: 1000 } };
-  s.capture.measurement(participant, { ...sample, contact: true }, { monotonic: 2000 });
-  participant.respiratoryEstimate = { rate: null, status: 'no_contact', quality: null, windowS: 0, computedAt: null };
-  s.capture.measurement(participant, { ...sample, contact: false });
-  participant.respiratoryEstimate = null;
-  s.capture.measurement(participant, { ...sample, contact: null });
+  for (const contact of [true, false, null]) s.capture.measurement(device, { ...sample, contact, rr: [1024, 512], rrMs: [1000, 500], energy: 7 });
   await s.capture.pause();
   const rows = s.records.filter(r => r.value.type === 'measurement').map(r => r.value.row);
-  assert.deepEqual(rows.map(row => row.contact_detected), [true, false, null]);
-  assert.equal(rows[0].respiratory_rate_est_bpm, 12.4); assert.equal(rows[0].respiratory_rate_age_s, 1);
-  assert.equal(rows[0].respiratory_rate_fit, 0.83); assert.equal(rows[0].rr_ms, '1000');
-  assert.equal(rows[1].respiratory_rate_est_bpm, null); assert.equal(rows[1].respiratory_rate_status, 'no_contact');
-  assert.equal(rows[2].respiratory_rate_est_bpm, null); assert.equal(rows[2].respiratory_rate_status, 'unavailable');
+  assert.deepEqual(rows.map(r => r.contact_detected), [true, false, null]);
+  for (const row of rows) {
+    assert.equal(row.rr_ticks_1024, '1024;512'); assert.equal(row.rr_ms, '1000;500');
+    assert.equal(row.energy_expended_kj, 7); assert.equal(row.heart_rate_bpm, 72);
+    assert.equal(Object.keys(row).length, 13);
+  }
   const lines = s.text('session-1/measurements.csv').trim().split('\r\n');
-  const headers = lines[0].split(','), contact = headers.indexOf('contact_detected'), estimate = headers.indexOf('respiratory_rate_est_bpm');
-  assert.deepEqual(lines.slice(1).map(line => line.split(',')[contact]), ['true', 'false', '']);
-  assert.deepEqual(lines.slice(1).map(line => line.split(',')[estimate]), ['12.4', '', '']);
+  assert.equal(lines[0], 'session_id,sequence,received_utc,elapsed_ms,device_id,device_name,label,simulated,heart_rate_bpm,contact_detected,energy_expended_kj,rr_ticks_1024,rr_ms');
+  assert.equal(lines.length, 4);
 });
