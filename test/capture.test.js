@@ -1,19 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CaptureSession } from '../src/capture.js';
-import { Recorder } from '../src/recorder.js';
+import { Recorder, COLUMNS } from '../src/recorder.js';
 import { ReconnectingMonitor } from '../src/bluetooth.js';
 import { memoryDirectory } from '../test-support/memory-directory.js';
 
 const sample = { bpm: 72, contact: true, energy: null, rr: [1024], rrMs: [1000] };
 const device = { id: 'one', name: 'HRM', label: 'P01', simulated: false };
 function setup() {
-  const records = []; let starts = 0;
-  const journal = { add: async (session, value) => records.push({ session, value }) };
+  let starts = 0;
   const { directory, files, text } = memoryDirectory();
-  const recorder = new Recorder(journal);
+  const recorder = new Recorder();
   const capture = new CaptureSession(recorder, { metadata: () => ({ session_id: `session-${++starts}` }) });
-  return { capture, recorder, directory, records, files, text };
+  return { capture, recorder, directory, files, text,
+    // Read actual output files; these fixtures use simple, comma-free field values.
+    get records() {
+      const records = [];
+      for (const path of files.keys()) {
+        const session = path.split('/')[0];
+        if (path.endsWith('/session.json')) records.push({ session, value: { type: 'session', ...JSON.parse(text(path)) } });
+        if (!path.endsWith('/measurements.csv')) continue;
+        for (const line of text(path).trim().split('\r\n').slice(1)) {
+          const values = line.split(',');
+          const row = Object.fromEntries(COLUMNS.map((key, i) => {
+            const raw = values[i];
+            const value = key === 'contact_detected' ? raw === '' ? null : raw === 'true' :
+              ['sequence', 'elapsed_ms', 'heart_rate_bpm', 'energy_expended_kj'].includes(key) ? raw === '' ? null : Number(raw) : raw;
+            return [key, value];
+          }));
+          records.push({ session, value: { type: 'measurement', row } });
+        }
+      }
+      return records;
+    }
+  };
 }
 test('capture cannot be enabled or started without an output folder', async () => {
   const { capture, records } = setup();
@@ -39,7 +59,7 @@ test('concurrent monitors share one automatic session and capture their first sa
     });
   });
   await Promise.all(managers.map(manager => manager.start()));
-  await s.recorder.tail;
+  await s.recorder.flush();
   assert.equal(s.records.filter(r => r.value.type === 'session').length, 1);
   const rows = s.records.filter(r => r.value.type === 'measurement').map(r => r.value.row);
   assert.equal(rows.length, 32); assert.equal(new Set(rows.map(r => r.device_id)).size, 32);

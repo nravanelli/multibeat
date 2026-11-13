@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { Recorder, csv, csvCell, CSV_HEADER } from '../src/recorder.js';
 import { memoryDirectory } from '../test-support/memory-directory.js';
 function setup() {
-  const records = []; let fail = false, failJournal = false;
-  const journal = { add: async (session, value) => { if (failJournal) throw new Error('quota exceeded'); records.push({ session, value }); } };
+  let fail = false;
   const filesystem = memoryDirectory({ beforeOperation: operation => { if (fail && operation === 'write') throw new Error('disk unavailable'); } });
-  return { recorder: new Recorder(journal), records, ...filesystem, diskFailure: b => { fail = b; }, journalFailure: b => { failJournal = b; } };
+  return { recorder: new Recorder(), ...filesystem, diskFailure: b => { fail = b; } };
 }
 const sample = n => ({ type: 'measurement', row: { sequence: n, label: 'P01', heart_rate_bpm: 70 } });
 test('CSV handles commas, quotes, newlines, and spreadsheet injection', () => {
@@ -15,34 +14,37 @@ test('CSV handles commas, quotes, newlines, and spreadsheet injection', () => {
   assert.equal(csvCell(null), '');
   assert.match(csv([{ label: 'P,01', heart_rate_bpm: 80 }]), /"P,01"/);
 });
-test('serial journal preserves order; folder contains one measurement CSV and one event log', async () => {
+test('folder recording preserves measurement order and writes a separate event log', async () => {
   const s = setup(); await s.recorder.start(s.directory, { session_id: 's1' });
   s.recorder.enqueue(sample(1)); s.recorder.enqueue({ type: 'event', kind: 'label_changed' }); s.recorder.enqueue(sample(2));
   await s.recorder.stop();
   assert.equal(s.recorder.count, 2); assert.equal(s.recorder.pending.length, 0);
-  assert.deepEqual(s.records.map(r => r.value.type), ['session', 'measurement', 'event', 'measurement']);
+  assert.equal(s.text('s1/measurements.csv'), csv([sample(1).row, sample(2).row]));
   assert.match(s.text('s1/measurements.csv'), /P01/);
   assert.equal(JSON.parse(s.text('s1/events.jsonl')).kind, 'label_changed');
   assert.equal(JSON.parse(s.text('s1/session.json')).session_id, 's1');
 });
-test('failed folder writes retain the batch and recovery; retry appends exactly once', async () => {
+test('failed folder writes retain the pending batch; retry appends exactly once', async () => {
   const s = setup(); await s.recorder.start(s.directory, { session_id: 's1' }); s.diskFailure(true);
   s.recorder.enqueue(sample(1)); await s.recorder.flush();
   assert.equal(s.recorder.pending.length, 1); assert.equal(s.recorder.savedBatches, 0); assert.match(s.recorder.diskError, /disk unavailable/);
   s.recorder.enqueue(sample(2)); s.diskFailure(false); await s.recorder.stop();
   assert.equal(s.recorder.pending.length, 0); assert.equal(s.recorder.diskError, null); assert.equal(s.recorder.savedBatches, 1);
   assert.equal(s.text('s1/measurements.csv').trim().split('\r\n').length, 3);
-  assert.equal(s.records.filter(r => r.value.type === 'measurement').length, 2);
+  assert.equal(s.recorder.count, 2);
 });
-test('journal failure is surfaced but folder recording continues', async () => {
-  const s = setup(); await s.recorder.start(s.directory, { session_id: 's1' }); s.journalFailure(true);
+test('folder recording works without accessing browser database storage', async t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, get() { throw new Error('Browser database access is forbidden'); } });
+  t.after(() => descriptor ? Object.defineProperty(globalThis, 'indexedDB', descriptor) : delete globalThis.indexedDB);
+  const s = setup(); await s.recorder.start(s.directory, { session_id: 's1' });
   s.recorder.enqueue(sample(1)); await s.recorder.stop();
-  assert.match(s.recorder.journalError, /quota exceeded/); assert.match(s.text('s1/measurements.csv'), /P01/);
+  assert.equal(s.text('s1/measurements.csv'), csv([sample(1).row]));
 });
 test('recording requires a folder and cannot silently fall back to browser-only storage', async () => {
   const s = setup();
   await assert.rejects(s.recorder.start(null, { session_id: 's1' }), /output folder/);
-  assert.equal(s.recorder.active, false); assert.equal(s.records.length, 0);
+  assert.equal(s.recorder.active, false); assert.equal(s.files.size, 0);
 });
 test('48 monitors over 60 seconds append all 2880 measurements to one CSV across bounded batches', async () => {
   const s = setup(); await s.recorder.start(s.directory, { session_id: 'load' });
@@ -79,7 +81,7 @@ test('event-file failure retries both files without duplicating rows or corrupti
   const filesystem = memoryDirectory({ beforeOperation: (operation, path) => {
     if (failEvents && operation === 'write' && path.endsWith('/events.jsonl')) throw new Error('event write failed');
   } });
-  const recorder = new Recorder({ add: async () => {} });
+  const recorder = new Recorder();
   await recorder.start(filesystem.directory, { session_id: 's1' });
   const row1 = { ...sample(1).row, label: '参与者 🫀' }, row2 = { ...sample(2).row, label: 'Élodie' }, row3 = { ...sample(3).row, label: 'Participant 03' };
   recorder.enqueue({ type: 'measurement', row: row1 }); recorder.enqueue({ type: 'event', kind: 'connected' });
@@ -102,7 +104,7 @@ for (const filename of ['measurements.csv', 'events.jsonl']) test(`retry is idem
   const filesystem = memoryDirectory({ afterClose: path => {
     if (failClose && path.endsWith('/' + filename)) { failClose = false; throw new Error('ambiguous close'); }
   } });
-  const recorder = new Recorder({ add: async () => {} });
+  const recorder = new Recorder();
   await recorder.start(filesystem.directory, { session_id: 's1' });
   recorder.enqueue(sample(1)); recorder.enqueue({ type: 'event', kind: 'connected' });
   failClose = true; await recorder.flush();
@@ -121,5 +123,21 @@ test('a shortened recording file is reported rather than silently filled with ho
   s.recorder.enqueue(sample(2)); await s.recorder.stop();
   assert.match(s.recorder.diskError, /shortened or replaced/);
   assert.equal(s.recorder.pending.length, 1);
-  assert.equal(s.records.filter(r => r.value.type === 'measurement').length, 2);
+  assert.equal(s.recorder.count, 2);
+});
+
+
+test('recording setup failure reports a folder error and a later successful setup clears it', async () => {
+  let fail = true;
+  const notifications = [];
+  const filesystem = memoryDirectory({ beforeOperation: operation => { if (fail && operation === 'write') throw new Error('setup write failed'); } });
+  const recorder = new Recorder(() => notifications.push(recorder.diskError));
+  await assert.rejects(recorder.start(filesystem.directory, { session_id: 'failed' }), /setup write failed/);
+  assert.equal(recorder.active, false); assert.equal(recorder.setupFailed, true);
+  assert.equal(recorder.diskError, 'setup write failed'); assert.deepEqual(notifications, ['setup write failed']);
+  fail = false;
+  await recorder.start(filesystem.directory, { session_id: 'next' });
+  assert.equal(recorder.diskError, null); assert.equal(recorder.setupFailed, false);
+  recorder.enqueue(sample(1)); await recorder.stop();
+  assert.equal(filesystem.text('next/measurements.csv'), csv([sample(1).row]));
 });

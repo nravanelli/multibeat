@@ -1,24 +1,29 @@
 import { parseHeartRate, ReconnectingMonitor, pairingRequestOptions } from './bluetooth.js';
 import { setButtonLabel } from './view.js';
 import { CaptureWakeLock } from './wake-lock.js';
-import { Journal, Recorder } from './recorder.js';
+import { Recorder } from './recorder.js';
 import { CaptureSession } from './capture.js';
 import { monitorDisplay } from './device-state.js';
 import { appendTrend, appendRRTrend } from './trends.js';
 import { TrendCharts } from './charts.js';
 import { loadPairedIds, savePairedIds } from './settings.js';
+import { loadDeviceOrder, moveDevice } from './device-order.js';
+import { chromeBluetoothFeatures, heartRateRange, DisconnectEpisodes, DisconnectSound, WriteErrorAlert } from './dashboard-options.js';
 
 export async function startDashboard(root) {
   const $ = id => root.getElementById(id);
   const devices = new Map();
+  let deviceOrder;
+  try { deviceOrder = loadDeviceOrder(localStorage); } catch { deviceOrder = []; }
+  let moving = null;
   const charts = new TrendCharts();
-  const journal = new Journal();
-  const recorder = new Recorder(journal, updateControls);
+  const recorder = new Recorder(updateControls);
   const capture = new CaptureSession(recorder, { metadata: sessionMetadata, onChange: updateControls });
-  let dbReady = false, busy = false, destroyed = false, pausing = null;
+  let busy = false, destroyed = false, pausing = null;
   let lastStorageError = null;
   let chooser = null;
   let folderBrowsing = false;
+  let recordedFileUrl = null;
   const wakeLock = new CaptureWakeLock(navigator.wakeLock, renderWakeLock,
     failure => console.warn('[MultiBeat][Wake lock]', { error: failure.name, message: failure.message }));
   function renderWakeLock(state) {
@@ -34,6 +39,131 @@ export async function startDashboard(root) {
   try { savedLabels = JSON.parse(localStorage.getItem('hr-labels') || '{}'); } catch {}
   try { pairedIds = loadPairedIds(localStorage); } catch {}
   const error = message => { if (destroyed) return; $('error').textContent = message; $('error').hidden = !message; };
+
+  const outages = new DisconnectEpisodes();
+  const writeAlert = new WriteErrorAlert();
+  let disconnectAlertActive = false;
+  const sound = new DisconnectSound(message => {
+    $('sound-state').textContent = message; $('sound-state').hidden = false;
+  });
+  const features = chromeBluetoothFeatures(navigator, globalThis.BluetoothDevice);
+  $('chrome-features').hidden = !features.chrome;
+  const reconnectSupport = features.restore && features.advertisements ? 'Reconnect helpers available' : 'Reconnect helpers limited';
+  $('chrome-feature-state').textContent = reconnectSupport;
+  $('chrome-features').title = reconnectSupport + ' · Open info for details';
+  $('chrome-feature-info').setAttribute('aria-label', reconnectSupport + '. About experimental Bluetooth features');
+  $('chrome-features').classList.toggle('is-limited', !features.restore || !features.advertisements);
+  $('chrome-feature-detail').textContent = `Paired-device restoration: ${features.restore ? 'available' : 'unavailable'}. Advertisement watching: ${features.advertisements ? 'available' : 'unavailable'}. This checks API availability, not the flag value.`;
+  $('chrome-feature-info').onclick = () => $('chrome-feature-dialog').showModal();
+  $('chrome-feature-close').onclick = () => $('chrome-feature-dialog').close();
+  $('chrome-flag-copy').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText('chrome://flags/#enable-experimental-web-platform-features');
+      if (!destroyed) $('chrome-copy-state').textContent = 'Copied. Paste into Chrome’s address bar.';
+    } catch { if (!destroyed) $('chrome-copy-state').textContent = 'Copy unavailable. Select and copy the address above.'; }
+  };
+  const tableHead = $('devices').tHead;
+  let grid = false;
+  try { grid = localStorage.getItem('multibeat-view') === 'grid'; } catch {}
+  function setView(view = grid ? 'grid' : 'table') {
+    finishMove();
+    grid = view === 'grid';
+    $('view-table').setAttribute('aria-pressed', String(!grid));
+    $('view-grid').setAttribute('aria-pressed', String(grid));
+    $('devices').classList.toggle('grid-view', grid);
+    if (grid) tableHead.remove();
+    else $('devices').insertBefore(tableHead, $('devices').querySelector('tbody'));
+    // Grid cards have their own structure; table semantics are restored in table view.
+    $('devices').setAttribute('role', grid ? 'list' : 'table');
+    $('pair-row').setAttribute('role', grid ? 'listitem' : 'rowgroup');
+    $('pair-row').querySelector('tr').setAttribute('role', grid ? 'presentation' : 'row');
+    $('pair-row').querySelector('td').setAttribute('role', grid ? 'presentation' : 'cell');
+    for (const d of devices.values()) {
+      d.hideRangeTooltip();
+      d.group.setAttribute('role', grid ? 'listitem' : 'rowgroup');
+      const action = d.node.querySelector('.device-action');
+      const find = d.node.querySelector('.device-find');
+      if (grid) d.node.querySelector('.card-actions').append(find, action);
+      else d.node.querySelector('.monitor-controls').append(action, find);
+      for (const element of [d.node, d.detail, ...d.node.children, ...d.detail.children]) {
+        if (!element.dataset.tableRole) element.dataset.tableRole = element.getAttribute('role');
+        element.setAttribute('role', grid ? 'presentation' : element.dataset.tableRole);
+      }
+    }
+    try { localStorage.setItem('multibeat-view', grid ? 'grid' : 'table'); } catch {}
+    charts.destroyAll(); render();
+  }
+  $('view-table').onclick = () => setView('table');
+  $('view-grid').onclick = () => setView('grid');
+  $('devices').classList.toggle('grid-view', grid);
+  if (grid) tableHead.remove();
+  $('monitor-dashboard').hidden = devices.size === 0;
+  $('alert-tone').onchange = async () => {
+    $('sound-state').hidden = true;
+    const tone = $('alert-tone').value;
+    $('alert-file-label').hidden = tone !== 'custom'; $('alert-test').disabled = tone === 'off';
+    await sound.select(tone);
+    if (!destroyed) render();
+  };
+  $('alert-test').onclick = async () => {
+    $('sound-state').hidden = true;
+    await sound.select($('alert-tone').value);
+    if (!destroyed) { render(); if (!sound.active) sound.play(); }
+  };
+  $('alert-file').onchange = () => {
+    const file = $('alert-file').files[0];
+    if (!file) return;
+    try { sound.setFile(file); $('sound-state').hidden = true; render(); }
+    catch (e) { $('sound-state').textContent = e.message; $('sound-state').hidden = false; }
+  };
+  $('alert-dismiss').onclick = () => { outages.dismiss(); render(); };
+  $('storage-alert-dismiss').onclick = () => { writeAlert.dismiss(); updateControls(); };
+
+  function applyDeviceOrder() {
+    const rank = new Map(deviceOrder.map((id, index) => [id, index]));
+    const ordered = [...devices.values()].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+    let before = $('pair-row');
+    for (const d of ordered.reverse()) {
+      if (d.group.nextElementSibling !== before) $('devices').insertBefore(d.group, before);
+      before = d.group;
+    }
+  }
+  function reorderDevice(d, target) {
+    const next = moveDevice(deviceOrder, d.id, target.id);
+    if (next === deviceOrder) return;
+    deviceOrder = next; applyDeviceOrder();
+    hideRangeTooltips();
+    const visibleOrder = [...$('devices').querySelectorAll('.device-group')].filter(group => !group.hidden);
+    $('order-state').textContent = `${d.name} moved to position ${visibleOrder.indexOf(d.group) + 1} of ${visibleOrder.length}.`;
+  }
+  function saveDeviceOrder() {
+    try { localStorage.setItem('multibeat-device-order', JSON.stringify(deviceOrder)); }
+    catch { error('Monitor order could not be remembered for future visits. The current order still applies.'); }
+  }
+  function finishMove(e) {
+    if (!moving || e && e.pointerId !== moving.pointerId) return;
+    const current = moving; moving = null;
+    current.d.group.classList.remove('is-moving');
+    if (current.moved) saveDeviceOrder();
+    try { current.handle.releasePointerCapture(current.pointerId); } catch {}
+  }
+  function onMovePointer(e) {
+    if (!moving || e.pointerId !== moving.pointerId) return;
+    if (!moving.moved && Math.hypot(e.clientX - moving.x, e.clientY - moving.y) < 5) return;
+    e.preventDefault(); moving.moved = true;
+    moving.d.group.classList.add('is-moving');
+    const group = root.elementFromPoint(e.clientX, e.clientY)?.closest('.device-group');
+    const target = [...devices.values()].find(d => d.group === group);
+    if (target && target !== moving.d) {
+      reorderDevice(moving.d, target);
+      try { moving.handle.setPointerCapture(e.pointerId); } catch {}
+    }
+  }
+  root.ownerDocument.addEventListener('pointermove', onMovePointer, { passive: false });
+  root.ownerDocument.addEventListener('pointerup', finishMove);
+  root.ownerDocument.addEventListener('pointercancel', finishMove);
+  const finishMoveOnBlur = () => finishMove();
+  window.addEventListener('blur', finishMoveOnBlur);
 
   function sessionMetadata() {
     return {
@@ -56,37 +186,40 @@ export async function startDashboard(root) {
     acquireWakeLock();
     const live = [...devices.values()].some(d => monitorDisplay(d, performance.now()).live);
     const settling = busy || !!pausing || !!capture.stopping;
-    const ready = dbReady && !!capture.directory && capture.enabled && !settling;
+    const ready = !!capture.directory && capture.enabled && !settling;
     $('connect').disabled = !ready || folderBrowsing;
     setButtonLabel($('connect'), chooser ? 'Choose in Chrome…' : 'Pair HRM', 'pair');
     $('cancel-chooser').hidden = !chooser;
     $('connect').title = ready ? 'Pair another heart rate monitor' : 'Choose an output folder and enable capture first';
-    $('folder').disabled = !dbReady || settling || capture.recording || !!capture.starting || folderBrowsing;
+    $('folder').disabled = settling || capture.recording || !!capture.starting || folderBrowsing;
     $('folder').textContent = capture.directory ? 'Change folder' : 'Choose folder';
     $('folder').title = capture.recording ? 'Pause capture to change the output folder' : capture.directory ? `Output folder: ${capture.directory.name}` : 'Choose where readings will be saved';
     $('folder-open').hidden = !capture.directory;
-    $('folder-open').disabled = folderBrowsing || !!chooser;
+    $('folder-open').setAttribute('aria-disabled', String(folderBrowsing || !!chooser));
     $('folder-name').textContent = capture.directory?.name || '';
-    $('folder-open').title = `Browse ${capture.directory?.name || 'output folder'} in the native folder dialog. Recording destination stays unchanged; this does not launch Finder/Explorer.`;
-    $('folder-open').setAttribute('aria-label', `Browse output folder ${capture.directory?.name || ''}`);
-    $('record').disabled = !dbReady || !capture.directory || settling || !!capture.starting;
-    setButtonLabel($('record'), pausing || capture.stopping ? 'Saving…' : capture.enabled ? 'Pause capture' : 'Resume capture', pausing || capture.stopping ? null : capture.enabled ? 'pause' : 'resume');
+    $('folder-open').title = `Open a recording file from ${capture.directory?.name || 'output folder'} using the native file picker. This does not launch Finder/Explorer.`;
+    $('folder-open').setAttribute('aria-label', `Browse recording files in ${capture.directory?.name || ''}`);
+    $('record').disabled = !capture.directory || settling || !!capture.starting;
+    const captureLabel = pausing || capture.stopping ? 'Saving…' : capture.enabled ? 'Pause capture' : 'Resume capture';
+    setButtonLabel($('record'), captureLabel, pausing || capture.stopping ? 'saving' : capture.enabled ? 'pause' : 'resume');
+    $('record').setAttribute('aria-label', captureLabel); $('record').title = captureLabel;
     const capturingLive = capture.recording && capture.enabled && live;
     const stateText = capture.recording && capture.enabled ? (live ? 'Capturing live data' : 'Waiting for monitors to return') : capture.starting ? 'Preparing recording…' : !capture.directory ? 'Choose a folder to begin' : capture.enabled ? 'Ready — connect a monitor' : 'Capture paused';
     if ($('record-state').textContent !== stateText) $('record-state').textContent = stateText;
     $('record-indicator').classList.toggle('is-recording', !!capturingLive);
     $('record-indicator').title = stateText;
-    const storageError = [recorder.diskError, recorder.journalError].filter(Boolean).join('; ');
+    const storageError = recorder.diskError;
     if (storageError && storageError !== lastStorageError) console.error('[MultiBeat][Storage]', storageError);
     lastStorageError = storageError;
-    $('retry').hidden = !recorder.diskError;
-    const storageMessage = [
-      recorder.diskError && `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes.`,
-      recorder.journalError && `Browser recovery journal failed: ${recorder.journalError}. Recovery may be incomplete.`
-    ].filter(Boolean).join(' ');
-    $('storage-state').textContent = storageMessage;
+    $('retry').hidden = !recorder.diskError || recorder.setupFailed;
+    writeAlert.update(recorder.diskError);
+    const storageMessage = recorder.diskError ? recorder.setupFailed ? `Recording setup failed: ${recorder.diskError}. Resume capture to retry before connecting monitors.` : `Folder write failed: ${recorder.diskError}. ${recorder.pending.length} records pending; retry writes before leaving this page.` : '';
+    if ($('storage-state').textContent !== storageMessage) $('storage-state').textContent = storageMessage;
+    $('storage-alert').hidden = !storageMessage;
+    $('storage-alert-dismiss').disabled = !writeAlert.active;
+    $('storage-alert-dismiss').textContent = writeAlert.active ? 'Dismiss write alert sound' : 'Write alert sound dismissed';
     $('storage-state').hidden = !storageMessage;
-    $('storage-state').style.color = storageMessage ? '#a0432b' : '';
+    sound.update(disconnectAlertActive || writeAlert.active);
 
   }
   async function prepareCapture() {
@@ -96,7 +229,7 @@ export async function startDashboard(root) {
       await capture.prepare();
       if (!wasRecording && capture.recording && !sessionStartedEvent) {
         sessionStartedEvent = true;
-        event('recording_started', 'Capture started automatically.', { storage: 'folder_and_browser' });
+        event('recording_started', 'Capture started automatically.', { storage: 'folder' });
         acquireWakeLock();
       }
     } catch (e) {
@@ -114,10 +247,68 @@ export async function startDashboard(root) {
     const detail = fragment.querySelector('.device-detail');
     detail.id = 'trend-' + crypto.randomUUID();
     const d = { id, name, simulated, bluetooth, label: savedLabels[id] || '', status: 'paused', last: null, history: [], rrHistory: [], rrClock: {}, node, detail, expanded: false, expandedMetric: 'hr', manuallyPaused: false, manager: null };
-    devices.set(id, d); $('devices').append(fragment);
+    const group = root.ownerDocument.createElement('tbody');
+    group.className = 'device-group'; group.setAttribute('role', 'rowgroup');
+    group.append(fragment); d.group = group;
+    devices.set(id, d); $('devices').insertBefore(group, $('pair-row'));
+    if (!deviceOrder.includes(id)) deviceOrder.push(id);
+    applyDeviceOrder();
+    const moveHandle = node.querySelector('.device-move');
+    moveHandle.setAttribute('aria-label', `Move ${name}. Use arrow keys to reorder.`);
+    moveHandle.onpointerdown = e => {
+      if (e.button !== 0 || moving) return;
+      moving = { d, handle: moveHandle, pointerId: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+      moveHandle.focus({ preventScroll: true });
+      try { moveHandle.setPointerCapture(e.pointerId); } catch {}
+    };
+    moveHandle.onkeydown = e => {
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const ordered = [...$('devices').querySelectorAll('.device-group')].filter(group => !group.hidden);
+      const from = ordered.indexOf(group);
+      const to = e.key === 'Home' ? 0 : e.key === 'End' ? ordered.length - 1 : Math.max(0, Math.min(ordered.length - 1, from + (['ArrowUp', 'ArrowLeft'].includes(e.key) ? -1 : 1)));
+      const target = [...devices.values()].find(device => device.group === ordered[to]);
+      if (target) { reorderDevice(d, target); saveDeviceOrder(); moveHandle.focus({ preventScroll: true }); }
+    };
     node.querySelector('.device-name').textContent = name;
     node.querySelector('.device-name').title = `${name} · ${id}`;
+    const rangeAlert = node.querySelector('.card-range-alert');
+    const rangeHelp = rangeAlert.querySelector('.card-range-help');
+    rangeHelp.id = detail.id + '-range-help';
+    rangeAlert.setAttribute('aria-describedby', rangeHelp.id);
+    let rangePinned = false;
+    d.hideRangeTooltip = () => {
+      rangePinned = false;
+      if (rangeHelp.matches(':popover-open')) rangeHelp.hidePopover();
+      rangeHelp.removeAttribute('data-open');
+    };
+    const showRangeTooltip = () => {
+      if (rangeAlert.hidden || d.node.hidden) return;
+      rangeHelp.setAttribute('data-open', 'true');
+      if (typeof rangeHelp.showPopover === 'function' && !rangeHelp.matches(':popover-open')) rangeHelp.showPopover();
+      const anchor = node.querySelector('.reading-value').getBoundingClientRect();
+      const bounds = rangeHelp.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - bounds.width - 8, (anchor.left + anchor.right - bounds.width) / 2));
+      const below = anchor.bottom + 6;
+      const preferredTop = below + bounds.height <= window.innerHeight - 8 ? below : anchor.top - bounds.height - 6;
+      const top = Math.max(8, Math.min(window.innerHeight - bounds.height - 8, preferredTop));
+      rangeHelp.style.left = left + 'px'; rangeHelp.style.top = top + 'px';
+    };
+    d.repositionRangeTooltip = () => { if (rangeHelp.hasAttribute('data-open')) showRangeTooltip(); };
+    rangeAlert.onpointerenter = showRangeTooltip;
+    rangeAlert.onpointerleave = () => { if (!rangePinned && root.activeElement !== rangeAlert) d.hideRangeTooltip(); };
+    rangeAlert.onfocus = showRangeTooltip;
+    rangeAlert.onclick = () => { if (rangePinned) d.hideRangeTooltip(); else { rangePinned = true; showRangeTooltip(); } };
+    rangeAlert.onblur = d.hideRangeTooltip;
+    rangeAlert.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); d.hideRangeTooltip(); } };
     const toggles = [...node.querySelectorAll('.trend-toggle')];
+    const cardToggle = node.querySelector('.card-graph-toggle');
+    cardToggle.setAttribute('aria-controls', detail.id);
+    cardToggle.onclick = () => {
+      d.expanded = !d.expanded;
+      if (d.expanded) { d.expandedMetric = 'hr'; detail.querySelector('.graph-metric').value = 'hr'; }
+      render();
+    };
     for (const toggle of toggles) {
       toggle.setAttribute('aria-controls', detail.id);
       toggle.onclick = () => {
@@ -129,7 +320,7 @@ export async function startDashboard(root) {
     }
     detail.querySelector('.graph-close').onclick = () => {
       d.expanded = false; render();
-      toggles.find(toggle => toggle.dataset.metric === d.expandedMetric).focus();
+      (grid ? node.querySelector('.card-graph-toggle') : toggles.find(toggle => toggle.dataset.metric === d.expandedMetric)).focus();
     };
     detail.querySelector('.graph-range').onchange = render;
     detail.querySelector('.graph-metric').onchange = e => { d.expandedMetric = e.target.value; render(); };
@@ -208,6 +399,7 @@ export async function startDashboard(root) {
       }
       render();
     };
+    setView();
     return d;
   }
   async function chooseDevice(target = null) {
@@ -289,12 +481,11 @@ export async function startDashboard(root) {
     const button = e.target.closest?.('#connect');
     if (!button) return;
     console.info('[MultiBeat][Controls] ' + JSON.stringify({ event: 'connect_pressed',
-      disabled: button.disabled, storage_ready: dbReady, folder_selected: !!capture.directory,
+      disabled: button.disabled, folder_selected: !!capture.directory,
       capture_enabled: capture.enabled, busy, pausing: !!pausing, saving: !!capture.stopping, chooser_pending: !!chooser
     }));
     if (button.disabled) error(pausing || capture.stopping ? 'Capture is still saving. Check the storage status and console for failures.' :
       busy ? 'Another capture operation is still in progress.' :
-      !dbReady ? 'Browser storage is not ready. Check the visible storage error.' :
       !capture.directory ? 'Choose an output folder before connecting a monitor.' : 'Resume capture before connecting a monitor.');
   };
   root.addEventListener('pointerdown', onConnectPointer, true);
@@ -309,8 +500,10 @@ export async function startDashboard(root) {
   }
   function draw(d, now) {
     if (d.node.hidden) return;
-    charts.draw(d.node.querySelector('.mini-hr'), d.history, { now, simulated: d.simulated });
-    charts.draw(d.node.querySelector('.mini-rr'), d.rrHistory, { now, simulated: d.simulated, metric: 'rr' });
+    if (!grid) {
+      charts.draw(d.node.querySelector('.mini-hr'), d.history, { now, simulated: d.simulated });
+      charts.draw(d.node.querySelector('.mini-rr'), d.rrHistory, { now, simulated: d.simulated, metric: 'rr' });
+    }
     if (d.expanded) charts.draw(d.detail.querySelector('.history-chart'), d.expandedMetric === 'rr' ? d.rrHistory : d.history, {
       now, simulated: d.simulated, detailed: true, metric: d.expandedMetric,
       windowMs: Number(d.detail.querySelector('.graph-range').value)
@@ -323,10 +516,17 @@ export async function startDashboard(root) {
     let connected = 0;
     for (const d of devices.values()) {
       const display = monitorDisplay(d, now);
+      d.node.querySelector('.device-move').setAttribute('aria-label', `Move ${d.label || d.name}. Use arrow keys to reorder.`);
       d.updateLabelEditor();
       if (d.status === 'connected') connected++;
       d.node.hidden = !`${d.name} ${d.label} ${d.id}`.toLowerCase().includes(filter);
       d.detail.hidden = !d.expanded || d.node.hidden;
+      d.group.hidden = d.node.hidden;
+      d.group.classList.toggle('has-graph', d.expanded);
+      d.group.classList.toggle('is-offline', display.offline);
+      const cardToggle = d.node.querySelector('.card-graph-toggle');
+      cardToggle.setAttribute('aria-expanded', String(d.expanded));
+      cardToggle.setAttribute('aria-label', `${d.expanded ? 'Collapse' : 'Expand'} graph for ${d.label || d.name}`);
       for (const toggle of d.node.querySelectorAll('.trend-toggle')) {
         const active = d.expanded && d.expandedMetric === toggle.dataset.metric;
         toggle.setAttribute('aria-expanded', String(active));
@@ -339,26 +539,67 @@ export async function startDashboard(root) {
       if (status.textContent !== display.text) status.textContent = display.text;
       status.className = 'device-status' + (display.offline ? ' offline' : !display.live ? ' stale' : '');
       d.node.classList.toggle('is-offline', display.offline);
+      d.node.classList.toggle('is-live', display.live);
       const note = d.node.querySelector('.connection-note');
       const connectionNote = [display.note, !display.live && d.connectionProblem].filter(Boolean).join(' · ');
       note.textContent = connectionNote; note.hidden = !connectionNote;
+      const connection = d.node.querySelector('.card-connection');
+      const paused = !capture.enabled || d.manuallyPaused || d.status === 'paused';
+      const retrying = ['connecting', 'reconnecting'].includes(d.status);
+      connection.dataset.state = paused ? 'paused' : retrying || !display.offline ? 'connecting' : 'offline';
+      connection.title = connectionNote;
+      const connectionLabel = paused ? !capture.enabled ? 'Capture paused' : 'Monitor paused' : retrying ? d.hasConnected ? 'Reconnecting…' : 'Connecting…' : d.status === 'permission' ? 'Permission needed' : display.offline ? 'OFFLINE · No readings' : 'Waiting for readings…';
+      const connectionText = connection.querySelector('.card-connection-label');
+      const cardStatus = display.offline && !connectionLabel.startsWith('OFFLINE') ? 'OFFLINE · ' + connectionLabel : connectionLabel;
+      if (connectionText.textContent !== cardStatus) connectionText.textContent = cardStatus;
       d.node.querySelector('.reading strong').textContent = display.live ? d.last.bpm : '—';
+      const range = heartRateRange(d.last?.bpm, display.live);
+      d.node.querySelector('.heart-rate-cell').dataset.range = range.state;
+      d.group.dataset.cardState = display.live ? range.state : d.status === 'connecting' || d.status === 'connected' && !display.offline ? 'connecting' : 'offline';
+      const rangeFlag = d.node.querySelector('.hr-range');
+      if (rangeFlag.textContent !== range.text) rangeFlag.textContent = range.text;
+      const rangeAlert = d.node.querySelector('.card-range-alert');
+      rangeAlert.hidden = !['low', 'high'].includes(range.state);
+      const rangeReason = `${d.last?.bpm} bpm is ${range.state === 'low' ? 'below 60 (bradycardia range)' : 'above 100 (tachycardia range)'}. Reference bands are for resting adults; activity and fitness affect interpretation. This is not a diagnosis.`;
+      rangeAlert.setAttribute('aria-label', `Heart rate alert for ${d.label || d.name}`);
+      const rangeHelp = rangeAlert.querySelector('.card-range-help');
+      if (rangeHelp.textContent !== rangeReason) rangeHelp.textContent = rangeReason;
+      if (rangeAlert.hidden || d.node.hidden) d.hideRangeTooltip();
+      d.node.querySelector('.last-received').textContent = d.last ? 'Last received ' + new Date(d.last.utc).toLocaleTimeString() : 'No readings received';
       d.node.querySelector('.contact').textContent = display.live && d.last.contact === false ? 'No skin contact' : '';
       const action = d.node.querySelector('.device-action');
       const canPause = d.manager?.enabled || d.simulated && d.status === 'connected';
       setButtonLabel(action, canPause ? 'Pause' : 'Resume', canPause ? 'pause' : 'resume');
       action.setAttribute('aria-label', `${canPause ? 'Pause' : 'Resume'} ${d.label || d.name}`);
+      const streaming = capture.recording && capture.enabled && display.live;
+      action.classList.toggle('is-streaming', !!streaming);
+      action.title = `${streaming ? 'Recording live readings · ' : ''}${canPause ? 'Pause' : 'Resume'} ${d.label || d.name}`;
+      action.setAttribute('aria-label', action.title);
       action.disabled = busy || !capture.enabled;
       const find = d.node.querySelector('.device-find');
       find.hidden = d.simulated || display.live;
       find.disabled = busy || !capture.enabled;
-      find.textContent = chooser ? 'Choose in Chrome…' : 'Find again';
+      setButtonLabel(find, chooser ? 'Choose in Chrome…' : 'Find again', 'find');
       find.setAttribute('aria-label', 'Find ' + (d.label || d.name) + ' again in Chrome');
       draw(d, now);
     }
+    const disconnected = [...devices.values()].filter(d => {
+      const display = monitorDisplay(d, now);
+      return capture.enabled && !d.manuallyPaused && d.status !== 'paused' && d.hasConnected &&
+        (display.offline || outages.current.has(d.id) && !display.live);
+    });
+    const pendingAlerts = outages.update(disconnected.map(d => d.id));
+    $('disconnect-alert').hidden = !pendingAlerts.length;
+    const alertMessage = `${pendingAlerts.length} monitor${pendingAlerts.length === 1 ? '' : 's'} offline. Check straps and connection status.`;
+    if ($('disconnect-message').textContent !== alertMessage) $('disconnect-message').textContent = alertMessage;
+    disconnectAlertActive = pendingAlerts.length > 0;
     $('connected').textContent = String(connected);
     $('device-count').textContent = devices.size;
     $('empty').hidden = devices.size > 0;
+    $('monitor-dashboard').hidden = devices.size === 0;
+    const pairButton = $('connect');
+    const pairTarget = devices.size ? $('pair-row').querySelector('td') : $('empty-actions');
+    if (pairButton.parentElement !== pairTarget) pairTarget.append(pairButton);
     const seconds = Math.floor((capture.recording ? now - capture.started : capture.elapsed) / 1000);
     $('duration').textContent = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, '0')).join(':');
     updateControls();
@@ -383,14 +624,33 @@ export async function startDashboard(root) {
     } catch (e) { if (e.name !== 'AbortError') error(`Folder access: ${e.message}`); }
     finally { busy = false; updateControls(); }
   };
-  $('folder-open').onclick = async () => {
+  function releaseRecordedFile() {
+    if (recordedFileUrl) URL.revokeObjectURL(recordedFileUrl);
+    recordedFileUrl = null;
+    $('recorded-file-open').removeAttribute('href'); $('recorded-file-download').removeAttribute('href');
+  }
+  $('recorded-file-close').onclick = () => $('recorded-file-dialog').close();
+  $('recorded-file-dialog').onclose = releaseRecordedFile;
+  $('folder-open').onclick = async e => {
+    e?.preventDefault();
     if (!capture.directory || folderBrowsing || chooser) return;
+    if (!window.showOpenFilePicker) return error('Opening recording files requires a browser with the File System Access API. Open the selected folder in your file manager manually.');
     folderBrowsing = true; updateControls();
     try {
-      // Browsing never replaces the destination, even if another folder is selected.
-      await window.showDirectoryPicker({ mode: 'read', startIn: capture.directory, id: 'hr-recordings-browse' });
+      const [handle] = await window.showOpenFilePicker({ startIn: capture.directory, id: 'hr-recordings-browse',
+        types: [{ description: 'Recording files', accept: { 'text/plain': ['.csv', '.json', '.jsonl', '.txt'] } }] });
+      if (destroyed) return;
+      const file = await handle.getFile();
+      if (destroyed) return;
+      releaseRecordedFile();
+      // Preview as inert text, including files with an unexpected MIME type.
+      recordedFileUrl = URL.createObjectURL(new Blob([file], { type: 'text/plain;charset=utf-8' }));
+      $('recorded-file-name').textContent = file.name;
+      $('recorded-file-open').href = recordedFileUrl;
+      $('recorded-file-download').href = recordedFileUrl; $('recorded-file-download').download = file.name;
+      $('recorded-file-dialog').showModal();
     } catch (failure) {
-      if (failure.name !== 'AbortError') error(`Could not browse the output folder: ${failure.message}`);
+      if (failure.name !== 'AbortError') error(`Could not open a recording file: ${failure.message}`);
     } finally { folderBrowsing = false; updateControls(); }
   };
   function acquireWakeLock() {
@@ -436,21 +696,6 @@ export async function startDashboard(root) {
     try { await recorder.flush(); if (!capture.recording) await recorder.stop(); }
     finally { $('retry').disabled = false; }
   };
-  // Exposed on the mount controller and in DevTools, without a backup panel.
-  const recovery = {
-    async sessions() { return journal.sessions(); },
-    async download(session) {
-      await recorder.tail;
-      const ids = session ? [session] : await journal.sessions();
-      const id = ids[0];
-      if (!id) throw new Error('No saved recordings');
-      const rows = await journal.all(id);
-      const blob = new Blob(rows.map(r => JSON.stringify(r.value) + '\n'), { type: 'application/x-ndjson' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `${id}-recovery.jsonl`; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-    }
-  };
   async function restorePairedDevices() {
     if (!pairedIds.length) return;
     if (!navigator.bluetooth?.getDevices) {
@@ -465,6 +710,11 @@ export async function startDashboard(root) {
       event('paired_restored', 'Remembered monitors restored. Select an output folder to enable automatic capture and reconnection.');
     } catch (e) { event('restore_failed', `Could not restore paired monitors: ${e.message}. Use Pair HRM.`); }
   }
+  const hideRangeTooltips = () => { for (const d of devices.values()) d.hideRangeTooltip(); };
+  const repositionRangeTooltips = () => { for (const d of devices.values()) d.repositionRangeTooltip(); };
+  window.addEventListener('resize', repositionRangeTooltips);
+  window.addEventListener('scroll', repositionRangeTooltips, true);
+  root.addEventListener('scroll', repositionRangeTooltips, true);
   const onBeforeUnload = e => {
     if (capture.recording || recorder.pending.length) { e.preventDefault(); e.returnValue = ''; }
   };
@@ -476,13 +726,23 @@ export async function startDashboard(root) {
     $('compatibility').textContent = 'Capture requires direct folder access. Use desktop Chrome or Edge on HTTPS with Web Bluetooth and the File System Access API. No folder means no recording.';
   }
   updateControls();
-  try { await journal.open(); dbReady = true; console.info('[MultiBeat][Recovery] Local recovery tools (sessions / download):', recovery); }
-  catch (e) { error(`Browser recovery storage unavailable: ${e.message}. Enable site storage to capture data.`); }
   await restorePairedDevices();
-  render();
+  setView();
   return {
-    recovery,
     async destroy() {
+      finishMove();
+      root.ownerDocument.removeEventListener('pointermove', onMovePointer);
+      root.ownerDocument.removeEventListener('pointerup', finishMove);
+      root.ownerDocument.removeEventListener('pointercancel', finishMove);
+      window.removeEventListener('blur', finishMoveOnBlur);
+      hideRangeTooltips();
+      window.removeEventListener('resize', repositionRangeTooltips);
+      window.removeEventListener('scroll', repositionRangeTooltips, true);
+      root.removeEventListener('scroll', repositionRangeTooltips, true);
+      sound.destroy();
+      $('chrome-feature-dialog').close();
+      $('recorded-file-dialog').onclose = null;
+      $('recorded-file-dialog').close(); releaseRecordedFile();
       charts.destroyAll();
       wakeLock.destroy();
       clearInterval(renderTimer); clearInterval(flushTimer);
@@ -493,7 +753,6 @@ export async function startDashboard(root) {
       const paused = pauseCapture();
       destroyed = true;
       await paused;
-      journal.db?.close();
     }
   };
 }

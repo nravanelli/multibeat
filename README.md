@@ -35,7 +35,7 @@ For a standalone website, also upload `index.html` and open that page. Node.js a
 
 ## What you need
 
-- Desktop Chrome or Edge with Web Bluetooth, direct folder access, and IndexedDB available.
+- Desktop Chrome or Edge with Web Bluetooth, direct folder access available.
 - An HTTPS website, or `http://localhost` for local testing. Double-clicking `index.html` through `file://` is not supported.
 - Monitors exposing the standard **Heart Rate Service** (`0x180D`) and **Heart Rate Measurement** characteristic (`0x2A37`). A brand name alone does not establish protocol compatibility.
 - Permission to use each monitor and write to a local output folder.
@@ -45,22 +45,34 @@ Standard heart-rate notifications are supported. Polar-specific ECG/acceleromete
 ## Record data
 
 1. Select **Choose folder** and grant read/write access. An output folder is required before pairing or capture.
-2. Wear or activate the strap, then click **Pair HRM** and select it. Repeat for additional monitors.
+2. Wear or activate the strap, then click **Pair HRM** in the final table row or dashed grid card and select it. Repeat for additional monitors.
 3. Recording starts automatically when the first monitor connects. Session files are prepared before notifications are enabled so the first sample can be captured. Later monitors join that session.
 4. Enter a participant code and click **Update**. Edits remain drafts until you activate the button. Committed changes apply to future CSV rows; earlier rows and filenames remain unchanged. The applied label is shown below the field.
 5. Click a heart-rate or RR trend to expand the device's graph. Choose the metric and a window of 1, 5, 30, or **60 minutes**. Mini graphs show the latest 60 seconds. Visible graphs always follow incoming data. Hover to inspect values or use the ＋/− buttons to change the live lookback duration; the right edge stays at now even when zoomed. **Reset zoom** restores the selected time window. With the chart focused, use +/− to zoom and Home to reset. There is no frozen or historical pan mode. History is collected while this page is open; it is not loaded from old recordings.
 6. Use a row's **Pause / Resume** control for one monitor. **Pause capture** stops all connections and retries and saves queued data. **Resume capture** starts a new session when the next monitor connects. Individually paused monitors remain paused.
 7. Before closing or refreshing, pause capture and resolve any visible storage errors. **Retry folder writes** retries retained data after a folder failure.
 
-The header contains the pairing and folder controls, Keep awake switch, connected/device counts, and recording timer. The filter sits above the table. Offline devices stay in the table with their participant labels and an explanation; old readings are not displayed as live data.
+The header contains Change/Choose folder, Keep awake, compact Bluetooth and sound controls, connected/device counts, and the recording timer. Keep awake sits beside the icon-only Pause/Resume capture button near the timer. When no monitors are listed, Pair HRM sits inside the empty-state panel in either view. After adding monitors, it becomes the final table row or dashed grid card. The filter and table/grid icon buttons sit above the monitors. Offline devices stay visible with their participant labels and an explanation; old readings are not displayed as live data.
 
 The heart beside MultiBeat pulses only while capture is enabled and at least one monitor has fresh readings. Reduced-motion preferences disable the animation. This indicates acquisition, not confirmation that every pending disk write has completed.
 
-The selected folder name stays visible. Clicking it opens the native folder dialog with that folder as the suggested starting location. Browsing or selecting another folder in this dialog does not change the recording destination. Browsers cannot directly launch Finder/Explorer or expose the folder's absolute path. Pause and use **Change folder** to change the destination.
+The selected folder name is a text link with a folder icon directly below Change folder. Clicking it opens the native file picker at the output folder so you can choose a recording file, then open a text preview in a new browser tab or download a copy. Browsing does not change the recording destination. Browsers cannot directly launch Finder/Explorer or reveal the folder's absolute path. Pause and use **Change folder** to change the destination. The file preview uses a local blob URL; a host Content Security Policy must permit blob navigation for previews.
+
+### Dashboard views and disconnect sounds
+
+Use the **Grid view** icon button for compact cards with the strap name, participant label editor, and a large heart-rate reading with bpm beneath it. Wide grids use up to six columns to fit around 20 collapsed cards on a desktop display; actual capacity depends on viewport size, label lengths, and offline messages. Pause/Resume is an icon beside the graph button. Mini trends are omitted in grid view. The selected view is remembered locally. Drag the small move handle beside a monitor name to reorder it in either view. Table and grid share the same locally remembered order; focus the handle and use arrow keys or Home/End to reorder with a keyboard. Pair HRM stays last. Label edits still require **Update**. Both table rows and grid cards use light blue below 60 bpm (bradycardia range), light orange above 100 bpm (tachycardia range), light red when offline, and yellow when connecting or waiting for first readings. Live readings in the 60–100 range use white. These are [resting adult reference bands](https://www.heart.org/en/health-topics/high-blood-pressure/the-facts-about-high-blood-pressure/all-about-heart-rate-pulse); activity and fitness affect interpretation, and the flags are not a diagnosis. Grid cards omit range captions and receipt-time text. In both views, a warning icon beside the live heart-rate value opens a tooltip explaining readings below 60 or above 100. The tooltip is centred over the reading and kept inside the viewport. A green dot on Pause indicates fresh readings are being acquired into the current recording; it does not confirm disk writes have completed. Connection, reconnection, and pause icons/messages replace the reading in a fixed area. Find again remains available as a magnifying-glass icon. The table retains last receipt times and full connection explanations.
+
+Click a card's graph icon to expand it to roughly half the grid on a wide screen (full width on narrow screens). Click again or **Close graph** to collapse. The same metric, time-window, hover, and live zoom controls are available in both views. Filtering uses applied labels, so uncommitted edits do not affect results.
+
+In the header, the **alert sound selector** offers Silent (default), Chime, Ring, Double beep, or **My audio file…**. Select an option and use the **Test sound** speaker icon beside the dropdown to preview/enable playback. Previews play even when no monitor is disconnected. A custom audio file stays on this computer, is limited to 10 MB, and must be selected again after reload. Custom previews and alert clips play for up to four seconds. No audio is uploaded. Built-in tones are synthesized locally; a host Content Security Policy must permit `media-src blob:` to play custom files.
+
+After an established strap disconnects or stops supplying fresh readings, an alert appears and the chosen sound repeats about every eight seconds. **Dismiss disconnect alert** silences the current outages; a new strap outage or a recovered strap disconnecting again can alert anew. Fresh readings clear that strap's alert. Intentional monitor/capture pauses do not alert. Alerts also cover filtered-out devices. Browser sound permissions, suspension, and computer sleep can interrupt audio; this is not a clinical alarm.
+
+On Chrome, the header checks whether paired-device restoration and advertisement watching are available. The **Experimental BLE reconnect** link and status dot, to the right of the sound selector and Test sound icon, retain these details in their tooltip and info dialog. Limited support means one or both optional APIs are unavailable; normal timed reconnection retries still run. Its info button opens an explanation and the `chrome://flags/#enable-experimental-web-platform-features` link with a copy-address button. Chrome may block opening internal links from websites, so paste the address into its address bar. A website cannot inspect the actual flag value or enable it automatically. Pause capture and save before relaunching Chrome. Advertisement watching may help returning straps reconnect without **Find again**, but permissions and radio/browser limitations still apply. See [Chrome flags](https://developer.chrome.com/docs/web-platform/chrome-flags) and [Bluetooth implementation status](https://github.com/whatwg/bluetooth/blob/main/implementation-status.md).
 
 ### Keep awake
 
-The larger **Keep awake** switch is enabled by default. During visible capture, it requests a screen wake lock:
+The **Keep awake** switch is enabled by default. During visible capture, it requests a screen wake lock:
 
 | Status | Meaning |
 | --- | --- |
@@ -89,7 +101,7 @@ selected-folder/
 - **`measurements.csv`**: one shared CSV for all devices in the session, with one header. Use `device_id` to separate device streams and `label` for the participant label at receipt.
 - **`events.jsonl`**: connection, label, and recording events, one JSON object per line. Devices joining later are represented in measurements and connection events.
 
-The current format version is **5**. Existing version 1–4 recordings and browser recovery records remain untouched and readable; earlier files may have different columns, including retired respiratory estimates. Rebranding does not rewrite existing files. New metadata uses `application: "MultiBeat"` and session folders use the `multibeat-` prefix.
+The current format version is **5**. Existing version 1–4 recordings remain untouched; earlier files may have different columns, including retired respiratory estimates. Rebranding does not rewrite existing files. New metadata uses `application: "MultiBeat"` and session folders use the `multibeat-` prefix.
 
 ### Measurement columns
 
@@ -109,7 +121,7 @@ The current format version is **5**. Existing version 1–4 recordings and brows
 | `rr_ticks_1024` | Reported RR intervals in 1/1024-second ticks, separated by semicolons. |
 | `rr_ms` | Those RR intervals converted to milliseconds, separated by semicolons. |
 
-The schema is exported as `COLUMNS` in `src/recorder.js`. CSV serialization quotes special characters and escapes leading spreadsheet-formula characters in text. JSONL recovery retains the original strings. Contact flags and reported RR intervals are preserved in recordings even when no skin contact is detected.
+The schema is exported as `COLUMNS` in `src/recorder.js`. CSV serialization quotes special characters and escapes leading spreadsheet-formula characters in text. Contact flags and reported RR intervals are preserved in recordings even when no skin contact is detected.
 
 ### Timestamps and long recordings
 
@@ -139,20 +151,13 @@ While a chooser is pending, pending/retrying connections are suspended; healthy 
 
 Physical capacity and reconnection reliability depend on the monitor, Bluetooth adapter, operating system, browser, competing connections, and radio environment. Test the intended monitors together on the collection computer. Nothing runs after the page is closed, and neither wake locks nor synthetic tests guarantee uninterrupted hardware acquisition.
 
-## Local recovery and privacy
+## Local files and privacy
 
-Measurements and events are also journaled in IndexedDB in this browser profile and origin. Folder and journal failures are reported separately. Keep the profile: private browsing, clearing site data, or browser eviction can remove recovery records. Moving from localhost to GitHub Pages creates a different origin, so device permissions, participant labels, and recovery records do not automatically transfer.
+Write errors show a prominent banner and use the selected alert sound, repeating about every eight seconds. **Dismiss write alert sound** silences the current failure while keeping the error and pending-record count visible. Repeated failures in the same episode stay dismissed; a successful write clears it, and a later failure alerts again. **Retry folder writes** retries pending rows. Setup failures instead prompt **Resume capture** to retry. Write alerts remain active even when capture is paused. Silent disables audio while retaining the visual alert. Disconnect alerts have their own dismissal.
 
-New recovery records use the `multibeat-hr` browser database. Recovery also discovers earlier app journals by their schema and session metadata when the browser supports database enumeration; it reads them without copying, modifying, or deleting them. In browsers without enumeration, older journals remain stored but cannot be listed by the new recovery tools. Paired IDs now use `multibeat-paired`. When that key is absent, one unambiguous prior `-paired` list is copied to it without deleting the original; conflicting lists are not automatically restored. Participant labels remain under `hr-labels`.
+Measurements and events are written only to the selected output folder. Writes are batched approximately every five seconds and drained when capture pauses. Unsaved records remain in this page's memory; resolve folder errors and pause capture before closing or refreshing the page.
 
-Open Developer Tools → Console and filter for **MultiBeat**. The `[MultiBeat][Recovery]` entry exposes `sessions()` and `download(sessionId)`; use Chrome's **Store object as global variable** action on that object to call them. Embeddings can use the mount controller:
-
-```js
-const sessions = await monitor.recovery.sessions();
-if (sessions.length) await monitor.recovery.download(sessions[0]);
-```
-
-Recovery downloads JSONL containing original session metadata, measurements, and events. Exporting reads the selected journal session into memory, so very large exports can exceed browser memory. Recovery complements checked folder files; it is not a guarantee against storage loss. Bluetooth diagnostics include IDs, stages, errors, and retry delays, without raw measurements or participant labels.
+Participant labels, paired monitor IDs, the selected dashboard view, and monitor order are remembered in local browser settings. Moving between website origins does not transfer those settings or Bluetooth permissions. Bluetooth diagnostics stay in the developer console and include device IDs, setup stages, errors, and retry delays without raw measurements or participant labels.
 
 Keep recordings, exports, browser profiles, and participant labels out of the repository. `recordings/` is ignored; choose an output folder outside the checkout.
 
@@ -198,11 +203,13 @@ If a static preview is already running on port 5173, use `node scripts/smoke.js 
 | `hr-monitor.js` | Public mount API, relative asset loading, teardown. |
 | `index.html` | Standalone website using the same mount API. |
 | `src/view.js`, `styles.css` | Dashboard markup, icons, and responsive styles. |
-| `src/app.js` | Interaction, device restoration, labels, and recovery tools. |
+| `src/app.js` | Interaction, device restoration, labels, and capture controls. |
 | `src/bluetooth.js` | Packet parsing, notifications, cancellation, and reconnection. |
-| `src/capture.js`, `src/recorder.js` | Session lifecycle, CSV writes, and journal. |
+| `src/capture.js`, `src/recorder.js` | Session lifecycle, ordered folder writes, and retries. |
 | `src/trends.js`, `src/device-state.js` | Bounded display history and live/offline status. |
 | `src/charts.js`, `vendor/uplot/` | Interactive HR/RR plots and pinned uPlot 1.6.32 with its MIT license. |
+| `src/dashboard-options.js` | Chrome capability checks, grid HR ranges, and local disconnect sounds/outage dismissal. |
+| `src/device-order.js` | Saved monitor order and reorder operations shared by table and grid. |
 | `src/settings.js` | Pairing settings and compatibility with earlier saved choices. |
 | `src/wake-lock.js` | Capture-only screen wake lock and its toggle. |
 | `test/`, `test-support/` | Node built-in tests and synthetic storage helpers. |
